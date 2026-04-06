@@ -8,10 +8,11 @@ int main(int agrc, char * argv[])
     initClk();
     
     //TODO it needs to get the remaining time from somewhere
-    //remainingtime = ??;
+    remainingtime = atoi(argv[1]);
     while (remainingtime > 0)
     {
-        // remainingtime = ??;
+        remainingtime--;
+        sleep(1);
     }
     
     destroyClk(false);
