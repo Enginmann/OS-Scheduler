@@ -23,7 +23,16 @@ typedef short bool;
 int * shmaddr;                 //
 //===============================
 
-
+// made by the team
+typedef struct PCB
+{
+    int id;
+    int pid;
+    int arrival;
+    int runtime;
+    int remaining;
+    int priority;
+} PCB;
 
 int getClk()
 {
