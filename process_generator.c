@@ -5,6 +5,7 @@ struct processData
     int arrivaltime;
     int priority;
     int runningtime;
+    int remainingtime;
     int id;
 };
 
@@ -54,6 +55,7 @@ int main(int argc, char *argv[])
         p[i].id = id;
         p[i].arrivaltime = arrival;
         p[i].runningtime = runtime;
+        p[i].remainingtime = runtime;
         p[i].priority = priority;
         i++;
     }
