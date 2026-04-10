@@ -6,6 +6,7 @@
 
 typedef struct QNode {
     int id;
+    int priority;
     struct QNode *next;
 } QNode;
 
@@ -41,6 +42,38 @@ static inline void enqueue(Queue *q, int id) {
     q->size++;
 }
 
+static inline void enqueuePri(Queue *q, int id, int pri) {
+    QNode *node = (QNode *)malloc(sizeof(QNode));
+    node->id = id;
+    node->priority = pri;
+    node->next = NULL;
+    if (q->front == NULL) 
+    {
+        q->front = q->rear = node;
+        q->size++;
+        return;
+    }
+    if (pri < q->front->priority) 
+    {
+        node->next = q->front;
+        q->front = node;
+        q->size++;
+        return;
+    }
+    QNode *cur = q->front;
+    while (cur->next != NULL && cur->next->priority <= pri) 
+    {
+        cur = cur->next;
+    }
+    node->next = cur->next;
+    cur->next = node;
+    if (node->next == NULL) 
+    {
+        q->rear = node;
+    }
+    q->size++;
+}
+
 static inline int dequeue(Queue *q) {
     if (q->front == NULL) return -1;
 
@@ -54,6 +87,18 @@ static inline int dequeue(Queue *q) {
     free(temp);
     q->size--;
     return id;
+}
+
+static inline void printQueue(Queue *q)
+{
+    QNode *cur = q->front;
+    printf("Queue: ");
+    while (cur)
+    {
+        printf("P%d(%d) -> ", cur->id, cur->priority);
+        cur = cur->next;
+    }
+    printf("NULL\n");
 }
 
 static inline void freeQueue(Queue *q) {

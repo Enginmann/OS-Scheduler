@@ -27,6 +27,130 @@ int finished_processes = 0;
 int number_of_processes;
 int current_running = -1;
 int msg_id;
+Queue *ready_queue;
+int pcb_count = 0;
+PCB *current = NULL;
+
+PCB createPCB(struct processData p)
+{
+    PCB pcb;
+    pcb.id = p.id;
+    pcb.arrival = p.arrivaltime;
+    pcb.runtime = p.runningtime;
+    pcb.remaining = p.runningtime;
+    pcb.priority = p.priority;
+    return pcb;
+}
+
+PCB *getPCB(int id)
+{
+    for (int i = 0; i < pcb_count; i++)
+    {
+        if (pcbs[i].id == id)
+        {
+            return &pcbs[i];
+        }
+    }
+    return NULL;
+}
+
+void context_switch(PCB *old, PCB *new)
+{
+    if (old != NULL)
+    {
+        printf("[TIME %d] STOP P%d\n", getClk(), old->id);
+        kill(old->pid, SIGSTOP);
+    }
+    printf("[TIME %d] CONTEXT SWITCH (1 sec)\n", getClk());
+    sleep(1);
+    if (new->pid == 0)
+    {
+        printf("[TIME %d] START P%d\n", getClk(), new->id);
+        int pid = fork();
+        if (pid == 0)
+        {
+            char remaining_time[10];
+            sprintf(remaining_time, "%d", new->remaining);
+            execl("./process.out", "process.out", remaining_time, NULL);
+        }
+        else
+        {
+            new->pid = pid;
+        }
+    }
+    else
+    {
+        printf("[TIME %d] RESUME P%d\n", getClk(), new->id);
+        kill(new->pid, SIGCONT);
+    }
+}
+
+void HPF()
+{
+    struct msgbuff message;
+    ready_queue = createQueue();
+    while (finished_processes < number_of_processes)
+    {
+        while (msgrcv(msg_id, &message, sizeof(struct processData), 1, IPC_NOWAIT) != -1)
+        {
+            printf("[TIME %d] Received P%d (arr=%d, run=%d, pri=%d)\n",
+                   getClk(),
+                   message.p.id,
+                   message.p.arrivaltime,
+                   message.p.runningtime,
+                   message.p.priority);
+            PCB pcb = createPCB(message.p);
+            if (pcb.runtime == 0)
+            {
+                printf("[TIME %d] P%d finished immediately\n", getClk(), pcb.id);
+                finished_processes++;
+                continue;
+            }
+            pcbs[pcb_count++] = pcb;
+            enqueuePri(ready_queue, pcb.id, pcb.priority);
+            printf("[TIME %d] Enqueue P%d\n", getClk(), pcb.id);
+            printQueue(ready_queue);
+            if (current != NULL && pcb.priority < current->priority)
+            {
+                printf("[TIME %d] Preemption: P%d replaced by P%d\n",
+                       getClk(),
+                       current->id,
+                       pcb.id);
+                enqueuePri(ready_queue, current->id, current->priority);
+                int id = dequeue(ready_queue);
+                PCB *next = getPCB(id);
+                context_switch(current, next);
+                current = next;
+            }
+        }
+        if (current == NULL && !isEmpty(ready_queue))
+        {
+            int id = dequeue(ready_queue);
+            PCB *next = getPCB(id);
+            printf("[TIME %d] Pick P%d from queue\n", getClk(), id);
+            context_switch(NULL, next);
+            current = next;
+        }
+        if (current != NULL)
+        {
+            printf("[TIME %d] Running P%d (remaining=%d)\n",
+                   getClk(),
+                   current->id,
+                   current->remaining);
+            sleep(1);
+            current->remaining--;
+            if (current->remaining == 0)
+            {
+                printf("[TIME %d] FINISH P%d\n",
+                       getClk(),
+                       current->id);
+                waitpid(current->pid, NULL, 0);
+                finished_processes++;
+                current = NULL;
+            }
+        }
+    }
+}
 
 ////////////////////////////////////////////////////////////
 // ROUND ROBIN ALGORITHM
@@ -163,10 +287,18 @@ int main(int argc, char *argv[]) {
 
     // FIX: removed the SIGCHLD handler — it was racing with our accounting logic.
     // Child cleanup is now done explicitly with waitpid() when remaining hits 0.
-
-    if (algo == 2) { // RR
+    if(algo == 1)
+    {
+        // HPF
+        HPF();
+    }
+    else if (algo == 2) 
+    { 
+        // RR
         RR(quantum);
-    } else {
+    } 
+    else 
+    {
         printf("Algorithm %d not implemented in this snippet.\n", algo);
     }
 

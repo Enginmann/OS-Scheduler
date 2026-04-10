@@ -16,6 +16,7 @@ struct msgbuff
 };
 
 void clearResources(int);
+int msg_id;
 
 int main(int argc, char *argv[])
 {
@@ -61,11 +62,6 @@ int main(int argc, char *argv[])
     }
 
     fclose(file);
-    for (int i = 0; i < number_of_processes; i++)
-    {
-        printf("%d %d %d %d\n", p[i].id, p[i].arrivaltime, p[i].runningtime, p[i].priority);
-    }
-
     // 2. Ask the user for the chosen scheduling algorithm and its parameters, if there are any.
     printf("Choose a scheduling algorithm:\n");
     printf("1. Preemptive Highest Priority First (HPF)\n");
@@ -95,6 +91,7 @@ int main(int argc, char *argv[])
     if (sched_pid == 0)
     {
         execl("./scheduler.out", "scheduler.out", count_of_processes, algo_char, q_char, n_char, m_char, NULL);
+        exit(0);
     }
     else
     {
@@ -110,7 +107,7 @@ int main(int argc, char *argv[])
             // To get time use this
             int x = getClk();
             printf("current time is %d\n", x);
-            int msg_id = msgget(MSGKEY, IPC_CREAT | 0666);
+            msg_id = msgget(MSGKEY, IPC_CREAT | 0666);
             struct msgbuff message;
             for (int i = 0; i < number_of_processes; i++)
             {
@@ -134,7 +131,7 @@ int main(int argc, char *argv[])
 
 void clearResources(int signum)
 {
-    msgctl(MSGKEY, IPC_RMID, NULL);
+    msgctl(msg_id, IPC_RMID, NULL);
     printf("Process Generator terminating!\n");
     raise(SIGKILL);
 }
