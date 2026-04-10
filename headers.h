@@ -32,6 +32,8 @@ typedef struct PCB
     int runtime;
     int remaining;
     int priority;
+    int waiting_time;
+    float WTA;
 } PCB;
 
 int getClk()
