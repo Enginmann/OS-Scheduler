@@ -101,6 +101,47 @@ static inline void printQueue(Queue *q)
     printf("NULL\n");
 }
 
+static inline int getSize(Queue *q)
+{
+    return q->size;
+}
+
+static inline int dequeueLast(Queue *q)
+{
+    if (q->front == NULL)
+        return -1; // empty queue
+
+    // Case 1: only ONE element
+    if (q->front == q->rear)
+    {
+        int id = q->front->id;
+        free(q->front);
+        q->front = q->rear = NULL;
+        q->size--;
+        return id;
+    }
+
+    // Case 2: more than one element
+    QNode *temp = q->front;
+
+    // move until second last
+    while (temp->next != q->rear)
+    {
+        temp = temp->next;
+    }
+
+    // temp now points to second last
+    int id = q->rear->id;
+
+    free(q->rear);
+    q->rear = temp;
+    q->rear->next = NULL;
+
+    q->size--;
+
+    return id;
+}
+
 static inline void freeQueue(Queue *q) {
     while (!isEmpty(q)) dequeue(q);
     free(q);

@@ -32,6 +32,8 @@ int msg_id;
 Queue *ready_queue;
 int pcb_count = 0;
 PCB *current = NULL;
+int assigned_cpu[100];
+int finish_time[100];
 
 PCB createPCB(struct processData p)
 {
@@ -57,7 +59,7 @@ PCB *getPCB(int id)
     return NULL;
 }
 
-void context_switch(FILE *pFile, PCB *old, PCB *new)
+void context_switch(FILE *pFile, FILE *pFile2, PCB *old, PCB *new, int number_of_cpu)
 {
     if (old != NULL && old->remaining > 0)
     {
@@ -67,15 +69,31 @@ void context_switch(FILE *pFile, PCB *old, PCB *new)
         printf("[TIME %d] CONTEXT SWITCH (1 sec)\n", getClk());
         sleep(1);
     }
-    else if(old != NULL)
+    else if (old != NULL)
     {
         printf("[TIME %d] CONTEXT SWITCH (1 sec)\n", getClk());
         sleep(1);
     }
     if (new->pid == 0)
     {
-        int waiting_time = getClk() - new->arrival - (new->runtime - new->remaining);
-        fprintf(pFile, "At\ttime\t%d\tprocess\t%d\tstarted\tarr\t%d\ttotal\t%d\tremain\t%d\twait\t%d\n", getClk(), new->id, new->arrival, new->runtime, new->remaining, waiting_time);
+        printf("[TIME %d] START P%d\n", getClk(), new->id);
+        if (pFile2 == NULL)
+        {
+            int waiting_time = getClk() - new->arrival - (new->runtime - new->remaining);
+            fprintf(pFile, "At\ttime\t%d\tprocess\t%d\tstarted\tarr\t%d\ttotal\t%d\tremain\t%d\twait\t%d\n", getClk(), new->id, new->arrival, new->runtime, new->remaining, waiting_time);
+        }
+        else
+        {
+            int waiting_time = getClk() - new->arrival - (new->runtime - new->remaining);
+            if (number_of_cpu == 1)
+            {
+                fprintf(pFile, "At\ttime\t%d\tprocess\t%d\tstarted\tarr\t%d\ttotal\t%d\tremain\t%d\twait\t%d\n", getClk(), new->id, new->arrival, new->runtime, new->remaining, waiting_time);
+            }
+            else
+            {
+                fprintf(pFile2, "At\ttime\t%d\tprocess\t%d\tstarted\tarr\t%d\ttotal\t%d\tremain\t%d\twait\t%d\n", getClk(), new->id, new->arrival, new->runtime, new->remaining, waiting_time);
+            }
+        }
         int pid = fork();
         if (pid == 0)
         {
@@ -136,7 +154,7 @@ void HPF(FILE *pFile)
                 enqueuePri(ready_queue, current->id, current->priority);
                 int id = dequeue(ready_queue);
                 PCB *next = getPCB(id);
-                context_switch(pFile, current, next);
+                context_switch(pFile, NULL, current, next, 1);
                 current = next;
             }
         }
@@ -145,7 +163,7 @@ void HPF(FILE *pFile)
             int id = dequeue(ready_queue);
             PCB *next = getPCB(id);
             printf("[TIME %d] Pick P%d from queue\n", getClk(), id);
-            context_switch(pFile, NULL, next);
+            context_switch(pFile, NULL, NULL, next, 1);
             current = next;
         }
         if (current != NULL)
@@ -173,7 +191,7 @@ void HPF(FILE *pFile)
                 {
                     int id = dequeue(ready_queue);
                     PCB *next = getPCB(id);
-                    context_switch(pFile, old, next);
+                    context_switch(pFile, NULL, old, next, 1);
                     current = next;
                 }
             }
@@ -230,7 +248,7 @@ void RR(FILE *pFile, int quantum)
 
             printf("[TIME %d] Pick P%d\n", getClk(), id);
 
-            context_switch(pFile, NULL, next);
+            context_switch(pFile, NULL, NULL, next, 1);
             current = next;
             quantum_counter = 0;
         }
@@ -271,7 +289,7 @@ void RR(FILE *pFile, int quantum)
                 {
                     int id = dequeue(ready_queue);
                     PCB *next = getPCB(id);
-                    context_switch(pFile, old, next);
+                    context_switch(pFile, NULL, old, next, 1);
                     current = next;
                 }
             }
@@ -293,7 +311,7 @@ void RR(FILE *pFile, int quantum)
 
                     quantum_counter = 0;
 
-                    context_switch(pFile, old, next);
+                    context_switch(pFile, NULL, old, next, 1);
                     current = next;
                 }
                 else
@@ -308,6 +326,169 @@ void RR(FILE *pFile, int quantum)
     }
 
     freeQueue(ready_queue);
+}
+
+int totalRunTime(Queue *q, PCB *cpu_current)
+{
+    int total = cpu_current ? cpu_current->remaining : 0;
+    QNode *cur = q->front;
+    while (cur)
+    {
+        PCB *pcb = getPCB(cur->id);
+        total += pcb->remaining;
+        cur = cur->next;
+    }
+    return total;
+}
+
+void twoCPUWithFCFS(FILE *pFile, FILE *pFile2, int N, int M)
+{
+    Queue *cpu1 = createQueue();
+    Queue *cpu2 = createQueue();
+    PCB *cpu1_current = NULL;
+    PCB *cpu2_current = NULL;
+    struct msgbuff message;
+    int last_clk = 0;
+    while (finished_processes < number_of_processes)
+    {
+        while (msgrcv(msg_id, &message, sizeof(struct processData), 3, IPC_NOWAIT) != -1)
+        {
+            printf("[TIME %d] Received P%d (run=%d)\n",
+                   getClk(), message.p.id, message.p.runningtime);
+            PCB pcb = createPCB(message.p);
+            pcbs[pcb_count++] = pcb;
+            int size_1 = getSize(cpu1);
+            int size_2 = getSize(cpu2);
+            if (size_1 <= size_2)
+            {
+                enqueue(cpu1, pcb.id);
+                assigned_cpu[pcb.id] = 1;
+                printf("[TIME %d] Enqueue P%d to CPU 1\n", getClk(), pcb.id);
+            }
+            else
+            {
+                enqueue(cpu2, pcb.id);
+                assigned_cpu[pcb.id] = 2;
+                printf("[TIME %d] Enqueue P%d to CPU 2\n", getClk(), pcb.id);
+            }
+            printQueue(cpu1);
+            printQueue(cpu2);
+        }
+        if (cpu1_current == NULL && !isEmpty(cpu1))
+        {
+            int id = dequeue(cpu1);
+            printf("[TIME %d] CPU1 Pick P%d\n", getClk(), id);
+            PCB *next = getPCB(id);
+            context_switch(pFile, pFile2, NULL, next, 1);
+            cpu1_current = next;
+        }
+        if (cpu1_current != NULL)
+        {
+            printf("[TIME %d] CPU1 Running P%d (rem=%d)\n",
+                   getClk(), cpu1_current->id, cpu1_current->remaining);
+            cpu1_current->remaining--;
+            if (cpu1_current->remaining == 0)
+            {
+                PCB *old = cpu1_current;
+                waitpid(cpu1_current->pid, NULL, 0);
+                finish_time[cpu1_current->id] = getClk();
+                finished_processes++;
+                printf("finished processes: %d\n", finished_processes);
+                int waiting_time = getClk() - cpu1_current->arrival - cpu1_current->runtime;
+                int TA = getClk() - cpu1_current->arrival;
+                float WTA = round(((float)TA / cpu1_current->runtime) * 100) / 100;
+                cpu1_current->waiting_time = waiting_time;
+                cpu1_current->WTA = WTA;
+                fprintf(pFile, "At\ttime\t%d\tprocess\t%d\tfinished\tarr\t%d\ttotal\t%d\tremain\t%d\twait\t%d\tTA\t%d\tWTA\t%.2f\n", getClk(), cpu1_current->id, cpu1_current->arrival, cpu1_current->runtime, cpu1_current->remaining, waiting_time, TA, WTA);
+                printf("[TIME %d] CPU1 FINISH P%d\n", getClk(), cpu1_current->id);
+                cpu1_current = NULL;
+                if (!isEmpty(cpu1))
+                {
+                    int id = dequeue(cpu1);
+                    PCB *next = getPCB(id);
+                    context_switch(pFile, pFile2, old, next, 1);
+                    cpu1_current = next;
+                }
+            }
+        }
+        if (cpu2_current == NULL && !isEmpty(cpu2))
+        {
+            int id = dequeue(cpu2);
+            printf("[TIME %d] CPU2 Pick P%d\n", getClk(), id);
+            PCB *next = getPCB(id);
+            context_switch(pFile, pFile2, NULL, next, 2);
+            cpu2_current = next;
+        }
+        if (cpu2_current != NULL)
+        {
+            printf("[TIME %d] CPU2 Running P%d (rem=%d)\n",
+                   getClk(), cpu2_current->id, cpu2_current->remaining);
+            cpu2_current->remaining--;
+            if (cpu2_current->remaining == 0)
+            {
+                PCB *old = cpu2_current;
+                waitpid(cpu2_current->pid, NULL, 0);
+                finish_time[cpu2_current->id] = getClk();
+                finished_processes++;
+                printf("finished processes: %d\n", finished_processes);
+                int waiting_time = getClk() - cpu2_current->arrival - cpu2_current->runtime;
+                int TA = getClk() - cpu2_current->arrival;
+                float WTA = round(((float)TA / cpu2_current->runtime) * 100) / 100;
+                cpu2_current->waiting_time = waiting_time;
+                cpu2_current->WTA = WTA;
+                fprintf(pFile2, "At\ttime\t%d\tprocess\t%d\tfinished\tarr\t%d\ttotal\t%d\tremain\t%d\twait\t%d\tTA\t%d\tWTA\t%.2f\n", getClk(), cpu2_current->id, cpu2_current->arrival, cpu2_current->runtime, cpu2_current->remaining, waiting_time, TA, WTA);
+                printf("[TIME %d] CPU2 FINISH P%d\n", getClk(), cpu2_current->id);
+                cpu2_current = NULL;
+                if (!isEmpty(cpu2))
+                {
+                    int id = dequeue(cpu2);
+                    PCB *next = getPCB(id);
+                    context_switch(pFile, pFile2, old, next, 2);
+                    cpu2_current = next;
+                }
+            }
+        }
+        sleep(1);
+        if (getClk() - last_clk >= N)
+        {
+            printf("[TIME %d] Checking load balance...\n", getClk());
+            int total1 = totalRunTime(cpu1, cpu1_current);
+            int total2 = totalRunTime(cpu2, cpu2_current);
+            printf("CPU1 total=%d, CPU2 total=%d\n", total1, total2);
+            while (abs(total1 - total2) > M)
+            {
+                printf("[TIME %d] STEAL START (3 sec)\n", getClk());
+                sleep(3);
+                if (total1 > total2 && !isEmpty(cpu1))
+                {
+                    int id = dequeueLast(cpu1);
+                    printf("[TIME %d] Moving P%d from CPU 1 to CPU 2\n", getClk(), id);
+                    fprintf(pFile, "At\ttime\t%d\tprocess\t%d\twas\tstolen\n", getClk(), id);
+                    enqueue(cpu2, id);
+                    assigned_cpu[id] = 2;
+                }
+                else if (total2 > total1 && !isEmpty(cpu2))
+                {
+                    int id = dequeueLast(cpu2);
+                    printf("[TIME %d] Moving P%d from CPU 2 to CPU 1\n", getClk(), id);
+                    fprintf(pFile2, "At\ttime\t%d\tprocess\t%d\twas\tstolen\n", getClk(), id);
+                    enqueue(cpu1, id);
+                    assigned_cpu[id] = 1;
+                }
+                else
+                {
+                    printf("[TIME %d] No steal possible\n", getClk());
+                    break;
+                }
+                total1 = totalRunTime(cpu1, cpu1_current);
+                total2 = totalRunTime(cpu2, cpu2_current);
+                printf("CPU1 total=%d, CPU2 total=%d\n", total1, total2);
+            }
+            last_clk = getClk();
+        }
+    }
+    freeQueue(cpu1);
+    freeQueue(cpu2);
 }
 
 ////////////////////////////////////////////////////////////
@@ -327,54 +508,136 @@ int main(int argc, char *argv[])
     number_of_processes = atoi(argv[1]);
     int algo = atoi(argv[2]);
     int quantum = atoi(argv[3]);
+    int N = atoi(argv[4]);
+    int M = atoi(argv[5]);
 
     msg_id = msgget(MSGKEY, IPC_CREAT | 0666);
 
-    FILE *pFile;
-    pFile = fopen("schedulerLog.txt", "w");
-    fprintf(pFile, "#At\ttime\tx\tprocess\ty\tstate\tarr\tw\ttotal\tz\tremain\ty\twait\tk\n");
-
-    // FIX: removed the SIGCHLD handler — it was racing with our accounting logic.
-    // Child cleanup is now done explicitly with waitpid() when remaining hits 0.
-    if (algo == 1)
+    if (algo == 1 || algo == 2)
     {
-        // HPF
-        HPF(pFile);
+        FILE *pFile;
+        pFile = fopen("schedulerLog.txt", "w");
+        fprintf(pFile, "#At\ttime\tx\tprocess\ty\tstate\tarr\tw\ttotal\tz\tremain\ty\twait\tk\n");
+        if (algo == 1)
+        {
+            // HPF
+            HPF(pFile);
+        }
+        else if (algo == 2)
+        {
+            // RR
+            RR(pFile, quantum);
+        }
+        fclose(pFile);
+        int total_waiting_time = 0;
+        float total_WTA_time = 0;
+        int total_runtime = 0;
+        float std_WTA = 0;
+        for (int i = 0; i < number_of_processes; i++)
+        {
+            total_waiting_time += pcbs[i].waiting_time;
+            total_WTA_time += pcbs[i].WTA;
+            total_runtime += pcbs[i].runtime;
+        }
+        float avg_waiting_time = round(((float)total_waiting_time / number_of_processes) * 100) / 100;
+        float avg_WTA_time = round(((float)total_WTA_time / number_of_processes) * 100) / 100;
+        float cpu_utilization = round(((float)total_runtime / getClk()) * 10000) / 100;
+        for (int i = 0; i < number_of_processes; i++)
+        {
+            std_WTA += pow(pcbs[i].WTA - avg_WTA_time, 2);
+        }
+        std_WTA = round((sqrt(std_WTA / number_of_processes)) * 100) / 100;
+        pFile = fopen("schedulerPerf.txt", "w");
+        fprintf(pFile, "CPU utilization = %.2f%%\n", cpu_utilization);
+        fprintf(pFile, "Avg WTA = %.2f\n", avg_WTA_time);
+        fprintf(pFile, "Avg Waiting = %.2f\n", avg_waiting_time);
+        fprintf(pFile, "Std WTA = %.2f\n", std_WTA);
+        fclose(pFile);
     }
-    else if (algo == 2)
+    else if (algo == 3)
     {
-        // RR
-        RR(pFile, quantum);
+        FILE *pFile1;
+        pFile1 = fopen("scheduler_1Log.txt", "w");
+        fprintf(pFile1, "#At\ttime\tx\tprocess\ty\tstate\tarr\tw\ttotal\tz\tremain\ty\twait\tk\n");
+        FILE *pFile2;
+        pFile2 = fopen("scheduler_2Log.txt", "w");
+        fprintf(pFile2, "#At\ttime\tx\tprocess\ty\tstate\tarr\tw\ttotal\tz\tremain\ty\twait\tk\n");
+        // 2cpu + FCFS
+        twoCPUWithFCFS(pFile1, pFile2, N, M);
+        fclose(pFile1);
+        fclose(pFile2);
+
+        int cpu1_count = 0, cpu2_count = 0;
+        int cpu1_runtime = 0, cpu2_runtime = 0;
+        float cpu1_wta_sum = 0, cpu2_wta_sum = 0;
+        float cpu1_wait_sum = 0, cpu2_wait_sum = 0;
+        int last1 = 0, last2 = 0;
+        for (int i = 0; i < number_of_processes; i++)
+        {
+            int id = pcbs[i].id;
+
+            if (assigned_cpu[id] == 1)
+            {
+                cpu1_count++;
+                cpu1_runtime += pcbs[i].runtime;
+                cpu1_wta_sum += pcbs[i].WTA;
+                cpu1_wait_sum += pcbs[i].waiting_time;
+                if(finish_time[id] > last1)
+                {
+                    last1 = finish_time[id];
+                }
+            }
+            else
+            {
+                cpu2_count++;
+                cpu2_runtime += pcbs[i].runtime;
+                cpu2_wta_sum += pcbs[i].WTA;
+                cpu2_wait_sum += pcbs[i].waiting_time;
+                if(finish_time[id] > last2)
+                {
+                    last2 = finish_time[id];
+                }
+            }
+        }
+        float cpu1_utilization = (last1 ? (round(((float)cpu1_runtime / last1) * 10000) / 100) : 0);
+        float cpu2_utilization = (last2 ? (round(((float)cpu2_runtime / last2) * 10000) / 100) : 0);
+        float cpu1_avg_wta = round(((float)cpu1_wta_sum / cpu1_count) * 100) / 100;
+        float cpu2_avg_wta = round(((float)cpu2_wta_sum / cpu2_count) * 100) / 100;
+        float cpu1_avg_wait = round(((float)cpu1_wait_sum / cpu1_count) * 100) / 100;
+        float cpu2_avg_wait = round(((float)cpu2_wait_sum / cpu2_count) * 100) / 100;
+        float cpu1_std_wta = 0, cpu2_std_wta = 0;
+        for (int i = 0; i < number_of_processes; i++)
+        {
+            int id = pcbs[i].id;
+            if (assigned_cpu[id] == 1)
+            {
+                cpu1_std_wta += pow(pcbs[i].WTA - cpu1_avg_wta, 2);
+            }
+            else
+            {
+                cpu2_std_wta += pow(pcbs[i].WTA - cpu2_avg_wta, 2);
+            }
+        }
+        cpu1_std_wta = round((sqrt(cpu1_std_wta / cpu1_count)) * 100) / 100;
+        cpu2_std_wta = round((sqrt(cpu2_std_wta / cpu2_count)) * 100) / 100;
+        pFile1 = fopen("scheduler_1Perf.txt", "w");
+        pFile2 = fopen("scheduler_2Perf.txt", "w");
+        fprintf(pFile1, "CPU utilization = %.2f%%\n", cpu1_utilization);
+        fprintf(pFile1, "Avg WTA = %.2f\n", cpu1_avg_wta);
+        fprintf(pFile1, "Avg Waiting = %.2f\n", cpu1_avg_wait);
+        fprintf(pFile1, "Std WTA = %.2f\n", cpu1_std_wta);
+        fprintf(pFile2, "CPU utilization = %.2f%%\n", cpu2_utilization);
+        fprintf(pFile2, "Avg WTA = %.2f\n", cpu2_avg_wta);
+        fprintf(pFile2, "Avg Waiting = %.2f\n", cpu2_avg_wait);
+        fprintf(pFile2, "Std WTA = %.2f\n", cpu2_std_wta);
+        fclose(pFile1);
+        fclose(pFile2);
     }
     else
     {
         printf("Algorithm %d not implemented in this snippet.\n", algo);
     }
-    fclose(pFile);
-    int total_waiting_time = 0;
-    float total_WTA_time = 0;
-    int total_runtime = 0;
-    float std_WTA = 0;
-    for (int i = 0; i < number_of_processes; i++)
-    {
-        total_waiting_time += pcbs[i].waiting_time;
-        total_WTA_time += pcbs[i].WTA;
-        total_runtime += pcbs[i].runtime;
-    }
-    float avg_waiting_time = round(((float)total_waiting_time / number_of_processes) * 100) / 100;
-    float avg_WTA_time = round(((float)total_WTA_time / number_of_processes) * 100) / 100;
-    float cpu_utilization = round(((float)total_runtime / getClk()) * 10000) / 100;
-    for (int i = 0; i < number_of_processes; i++)
-    {
-        std_WTA += pow(pcbs[i].WTA - avg_WTA_time, 2);
-    }
-    std_WTA = round((sqrt(std_WTA / number_of_processes)) * 100) / 100;
-    pFile = fopen("schedulerPerf.txt", "w");
-    fprintf(pFile, "CPU utilization = %.2f%%\n", cpu_utilization);
-    fprintf(pFile, "Avg WTA = %.2f\n", avg_WTA_time);
-    fprintf(pFile, "Avg Waiting = %.2f\n", avg_waiting_time);
-    fprintf(pFile, "Std WTA = %.2f\n", std_WTA);
-    fclose(pFile);
+
     printf("All processes finished. Cleaning up...\n");
     destroyClk(true);
     return 0;
