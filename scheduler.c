@@ -297,30 +297,43 @@ void RR(FILE *pFile, int quantum)
             // ===== QUANTUM EXPIRE =====
             else if (quantum_counter == quantum)
             {
-                // 🔥 Only switch if there is another process
-                if (!isEmpty(ready_queue))
+                // 🔥 RECEIVE first (same-cycle arrivals)
+                while (msgrcv(msg_id, &message, sizeof(struct processData), 2, IPC_NOWAIT) != -1)
                 {
-                    printf("[TIME %d] Quantum expired for P%d\n",
-                           getClk(), current->id);
+                    printf("[TIME %d] Received P%d (run=%d)\n",
+                           getClk(), message.p.id, message.p.runningtime);
 
-                    enqueue(ready_queue, current->id);
+                    PCB pcb = createPCB(message.p);
 
-                    PCB *old = current;
-                    int id = dequeue(ready_queue);
-                    PCB *next = getPCB(id);
+                    if (pcb.runtime == 0)
+                    {
+                        printf("[TIME %d] P%d finished immediately\n", getClk(), pcb.id);
+                        finished_processes++;
+                        continue;
+                    }
 
-                    quantum_counter = 0;
-
-                    context_switch(pFile, NULL, old, next, 1);
-                    current = next;
+                    pcbs[pcb_count++] = pcb;
+                    enqueue(ready_queue, pcb.id);
                 }
-                else
-                {
-                    // 🔥 NO SWITCH — just reset quantum
-                    printf("[TIME %d] Quantum reset (only process)\n", getClk());
 
-                    quantum_counter = 0;
-                }
+                printf("[TIME %d] Quantum expired for P%d\n",
+                       getClk(), current->id);
+
+                // 🔥 ALWAYS enqueue current first
+                enqueue(ready_queue, current->id);
+
+                PCB *old = current;
+
+                // 🔥 ALWAYS pick next (queue is guaranteed non-empty now)
+                int id = dequeue(ready_queue);
+                PCB *next = getPCB(id);
+
+                quantum_counter = 0;
+
+                // 🔥 ALWAYS DO CONTEXT SWITCH
+                context_switch(pFile, NULL, old, next, 1);
+
+                current = next;
             }
         }
     }
@@ -373,6 +386,44 @@ void twoCPUWithFCFS(FILE *pFile, FILE *pFile2, int N, int M)
             }
             printQueue(cpu1);
             printQueue(cpu2);
+        }
+        if (getClk() - last_clk >= N)
+        {
+            printf("[TIME %d] Checking load balance...\n", getClk());
+            int total1 = totalRunTime(cpu1, cpu1_current);
+            int total2 = totalRunTime(cpu2, cpu2_current);
+            printf("CPU1 total=%d, CPU2 total=%d\n", total1, total2);
+            while (abs(total1 - total2) > M)
+            {
+                printf("[TIME %d] STEAL START (3 sec)\n", getClk());
+                if (total1 > total2 && !isEmpty(cpu1))
+                {
+                    int id = dequeueLast(cpu1);
+                    printf("[TIME %d] Moving P%d from CPU 1 to CPU 2\n", getClk(), id);
+                    fprintf(pFile, "At\ttime\t%d\tprocess\t%d\twas\tstolen\n", getClk(), id);
+                    enqueue(cpu2, id);
+                    assigned_cpu[id] = 2;
+                    sleep(3);
+                }
+                else if (total2 > total1 && !isEmpty(cpu2))
+                {
+                    int id = dequeueLast(cpu2);
+                    printf("[TIME %d] Moving P%d from CPU 2 to CPU 1\n", getClk(), id);
+                    fprintf(pFile2, "At\ttime\t%d\tprocess\t%d\twas\tstolen\n", getClk(), id);
+                    enqueue(cpu1, id);
+                    assigned_cpu[id] = 1;
+                    sleep(3);
+                }
+                else
+                {
+                    printf("[TIME %d] No steal possible\n", getClk());
+                    break;
+                }
+                total1 = totalRunTime(cpu1, cpu1_current);
+                total2 = totalRunTime(cpu2, cpu2_current);
+                printf("CPU1 total=%d, CPU2 total=%d\n", total1, total2);
+            }
+            last_clk = getClk();
         }
         if (cpu1_current == NULL && !isEmpty(cpu1))
         {
@@ -449,43 +500,6 @@ void twoCPUWithFCFS(FILE *pFile, FILE *pFile2, int N, int M)
             }
         }
         sleep(1);
-        if (getClk() - last_clk >= N)
-        {
-            printf("[TIME %d] Checking load balance...\n", getClk());
-            int total1 = totalRunTime(cpu1, cpu1_current);
-            int total2 = totalRunTime(cpu2, cpu2_current);
-            printf("CPU1 total=%d, CPU2 total=%d\n", total1, total2);
-            while (abs(total1 - total2) > M)
-            {
-                printf("[TIME %d] STEAL START (3 sec)\n", getClk());
-                sleep(3);
-                if (total1 > total2 && !isEmpty(cpu1))
-                {
-                    int id = dequeueLast(cpu1);
-                    printf("[TIME %d] Moving P%d from CPU 1 to CPU 2\n", getClk(), id);
-                    fprintf(pFile, "At\ttime\t%d\tprocess\t%d\twas\tstolen\n", getClk(), id);
-                    enqueue(cpu2, id);
-                    assigned_cpu[id] = 2;
-                }
-                else if (total2 > total1 && !isEmpty(cpu2))
-                {
-                    int id = dequeueLast(cpu2);
-                    printf("[TIME %d] Moving P%d from CPU 2 to CPU 1\n", getClk(), id);
-                    fprintf(pFile2, "At\ttime\t%d\tprocess\t%d\twas\tstolen\n", getClk(), id);
-                    enqueue(cpu1, id);
-                    assigned_cpu[id] = 1;
-                }
-                else
-                {
-                    printf("[TIME %d] No steal possible\n", getClk());
-                    break;
-                }
-                total1 = totalRunTime(cpu1, cpu1_current);
-                total2 = totalRunTime(cpu2, cpu2_current);
-                printf("CPU1 total=%d, CPU2 total=%d\n", total1, total2);
-            }
-            last_clk = getClk();
-        }
     }
     freeQueue(cpu1);
     freeQueue(cpu2);
@@ -582,7 +596,7 @@ int main(int argc, char *argv[])
                 cpu1_runtime += pcbs[i].runtime;
                 cpu1_wta_sum += pcbs[i].WTA;
                 cpu1_wait_sum += pcbs[i].waiting_time;
-                if(finish_time[id] > last1)
+                if (finish_time[id] > last1)
                 {
                     last1 = finish_time[id];
                 }
@@ -593,7 +607,7 @@ int main(int argc, char *argv[])
                 cpu2_runtime += pcbs[i].runtime;
                 cpu2_wta_sum += pcbs[i].WTA;
                 cpu2_wait_sum += pcbs[i].waiting_time;
-                if(finish_time[id] > last2)
+                if (finish_time[id] > last2)
                 {
                     last2 = finish_time[id];
                 }
