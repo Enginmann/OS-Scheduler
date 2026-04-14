@@ -560,7 +560,7 @@ int main(int argc, char *argv[])
         }
         float avg_waiting_time = round(((float)total_waiting_time / number_of_processes) * 100) / 100;
         float avg_WTA_time = round(((float)total_WTA_time / number_of_processes) * 100) / 100;
-        float cpu_utilization = round(((float)total_runtime / getClk()) * 10000) / 100;
+        float cpu_utilization = round(((float)total_runtime / (getClk()-1)) * 10000) / 100;
         for (int i = 0; i < number_of_processes; i++)
         {
             std_WTA += pow(pcbs[i].WTA - avg_WTA_time, 2);
