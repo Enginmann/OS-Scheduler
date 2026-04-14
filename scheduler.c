@@ -32,14 +32,14 @@ int msg_id;
 Queue *ready_queue;
 int pcb_count = 0;
 PCB *current = NULL;
-int assigned_cpu[100];
+int assigned_cpu[100];//assigned[id] = 1 or 2 depending on which cpu the process is assigned to
 int finish_time[100];
 
 PCB createPCB(struct processData p)
 {
     PCB pcb;
     pcb.id = p.id;
-    pcb.pid = 0;
+    pcb.pid = 0;//not started yet
     pcb.arrival = p.arrivaltime;
     pcb.runtime = p.runningtime;
     pcb.remaining = p.runningtime;
@@ -145,6 +145,7 @@ void HPF(FILE *pFile)
             enqueuePri(ready_queue, pcb.id, pcb.priority);
             printf("[TIME %d] Enqueue P%d\n", getClk(), pcb.id);
             printQueue(ready_queue);
+            //preemption check
             if (current != NULL && pcb.priority < current->priority)
             {
                 printf("[TIME %d] Preemption: P%d replaced by P%d\n",
@@ -158,6 +159,7 @@ void HPF(FILE *pFile)
                 current = next;
             }
         }
+        //pick next process if current is NULL
         if (current == NULL && !isEmpty(ready_queue))
         {
             int id = dequeue(ready_queue);
@@ -166,13 +168,14 @@ void HPF(FILE *pFile)
             context_switch(pFile, NULL, NULL, next, 1);
             current = next;
         }
+        //run current process
         if (current != NULL)
         {
             printf("[TIME %d] Running P%d (remaining=%d)\n",
                    getClk(),
                    current->id,
                    current->remaining);
-            sleep(1);
+            
             current->remaining--;
             if (current->remaining == 0)
             {
@@ -196,6 +199,7 @@ void HPF(FILE *pFile)
                 }
             }
         }
+        sleep(1);
     }
     freeQueue(ready_queue);
 }
@@ -297,7 +301,7 @@ void RR(FILE *pFile, int quantum)
             // ===== QUANTUM EXPIRE =====
             else if (quantum_counter == quantum)
             {
-                // 🔥 RECEIVE first (same-cycle arrivals)
+                //  RECEIVE first (same-cycle arrivals)
                 while (msgrcv(msg_id, &message, sizeof(struct processData), 2, IPC_NOWAIT) != -1)
                 {
                     printf("[TIME %d] Received P%d (run=%d)\n",
@@ -319,23 +323,24 @@ void RR(FILE *pFile, int quantum)
                 printf("[TIME %d] Quantum expired for P%d\n",
                        getClk(), current->id);
 
-                // 🔥 ALWAYS enqueue current first
+                //  ALWAYS enqueue current first
                 enqueue(ready_queue, current->id);
 
                 PCB *old = current;
 
-                // 🔥 ALWAYS pick next (queue is guaranteed non-empty now)
+                //  ALWAYS pick next (queue is guaranteed non-empty now)
                 int id = dequeue(ready_queue);
                 PCB *next = getPCB(id);
 
                 quantum_counter = 0;
 
-                // 🔥 ALWAYS DO CONTEXT SWITCH
+                //  ALWAYS DO CONTEXT SWITCH
                 context_switch(pFile, NULL, old, next, 1);
 
                 current = next;
             }
         }
+        
     }
 
     freeQueue(ready_queue);
