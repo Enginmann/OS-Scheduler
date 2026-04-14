@@ -32,14 +32,14 @@ int msg_id;
 Queue *ready_queue;
 int pcb_count = 0;
 PCB *current = NULL;
-int assigned_cpu[100];//assigned[id] = 1 or 2 depending on which cpu the process is assigned to
+int assigned_cpu[100]; // assigned[id] = 1 or 2 depending on which cpu the process is assigned to
 int finish_time[100];
 
 PCB createPCB(struct processData p)
 {
     PCB pcb;
     pcb.id = p.id;
-    pcb.pid = 0;//not started yet
+    pcb.pid = 0; // not started yet
     pcb.arrival = p.arrivaltime;
     pcb.runtime = p.runningtime;
     pcb.remaining = p.runningtime;
@@ -145,7 +145,7 @@ void HPF(FILE *pFile)
             enqueuePri(ready_queue, pcb.id, pcb.priority);
             printf("[TIME %d] Enqueue P%d\n", getClk(), pcb.id);
             printQueue(ready_queue);
-            //preemption check
+            // preemption check
             if (current != NULL && pcb.priority < current->priority)
             {
                 printf("[TIME %d] Preemption: P%d replaced by P%d\n",
@@ -159,7 +159,7 @@ void HPF(FILE *pFile)
                 current = next;
             }
         }
-        //pick next process if current is NULL
+        // pick next process if current is NULL
         if (current == NULL && !isEmpty(ready_queue))
         {
             int id = dequeue(ready_queue);
@@ -168,14 +168,15 @@ void HPF(FILE *pFile)
             context_switch(pFile, NULL, NULL, next, 1);
             current = next;
         }
-        //run current process
+        // run current process
         if (current != NULL)
         {
             printf("[TIME %d] Running P%d (remaining=%d)\n",
                    getClk(),
                    current->id,
                    current->remaining);
-            
+
+            sleep(1);
             current->remaining--;
             if (current->remaining == 0)
             {
@@ -190,6 +191,28 @@ void HPF(FILE *pFile)
                 fprintf(pFile, "At\ttime\t%d\tprocess\t%d\tfinished\tarr\t%d\ttotal\t%d\tremain\t%d\twait\t%d\tTA\t%d\tWTA\t%.2f\n", getClk(), current->id, current->arrival, current->runtime, current->remaining, waiting_time, TA, WTA);
 
                 current = NULL;
+                while (msgrcv(msg_id, &message, sizeof(struct processData), 2, IPC_NOWAIT) != -1)
+                {
+                    printf("[TIME %d] Received P%d (run=%d)\n",
+                           getClk(),
+                           message.p.id,
+                           message.p.runningtime);
+
+                    PCB pcb = createPCB(message.p);
+
+                    if (pcb.runtime == 0)
+                    {
+                        printf("[TIME %d] P%d finished immediately\n",
+                               getClk(),
+                               pcb.id);
+
+                        finished_processes++;
+                        continue;
+                    }
+
+                    pcbs[pcb_count++] = pcb;
+                    enqueuePri(ready_queue, pcb.id, pcb.priority);
+                }
                 if (!isEmpty(ready_queue))
                 {
                     int id = dequeue(ready_queue);
@@ -199,7 +222,6 @@ void HPF(FILE *pFile)
                 }
             }
         }
-        sleep(1);
     }
     freeQueue(ready_queue);
 }
@@ -275,25 +297,67 @@ void RR(FILE *pFile, int quantum)
             if (current->remaining == 0)
             {
                 PCB *old = current;
+
                 printf("[TIME %d] FINISH P%d\n",
                        getClk(), current->id);
 
                 waitpid(current->pid, NULL, 0);
 
                 finished_processes++;
+
                 int waiting_time = getClk() - current->arrival - current->runtime;
                 int TA = getClk() - current->arrival;
                 float WTA = round(((float)TA / current->runtime) * 100) / 100;
+
                 current->waiting_time = waiting_time;
                 current->WTA = WTA;
-                fprintf(pFile, "At\ttime\t%d\tprocess\t%d\tfinished\tarr\t%d\ttotal\t%d\tremain\t%d\twait\t%d\tTA\t%d\tWTA\t%.2f\n", getClk(), current->id, current->arrival, current->runtime, current->remaining, waiting_time, TA, WTA);
+
+                fprintf(pFile,
+                        "At\ttime\t%d\tprocess\t%d\tfinished\tarr\t%d\ttotal\t%d\tremain\t%d\twait\t%d\tTA\t%d\tWTA\t%.2f\n",
+                        getClk(),
+                        current->id,
+                        current->arrival,
+                        current->runtime,
+                        current->remaining,
+                        waiting_time,
+                        TA,
+                        WTA);
+
                 current = NULL;
                 quantum_counter = 0;
+
+                // IMPORTANT: receive same-timestep arrivals BEFORE picking next process
+                while (msgrcv(msg_id, &message, sizeof(struct processData), 2, IPC_NOWAIT) != -1)
+                {
+                    printf("[TIME %d] Received P%d (run=%d)\n",
+                           getClk(),
+                           message.p.id,
+                           message.p.runningtime);
+
+                    PCB pcb = createPCB(message.p);
+
+                    if (pcb.runtime == 0)
+                    {
+                        printf("[TIME %d] P%d finished immediately\n",
+                               getClk(),
+                               pcb.id);
+
+                        finished_processes++;
+                        continue;
+                    }
+
+                    pcbs[pcb_count++] = pcb;
+                    enqueue(ready_queue, pcb.id);
+                }
+
+                // NOW decide next process
                 if (!isEmpty(ready_queue))
                 {
                     int id = dequeue(ready_queue);
                     PCB *next = getPCB(id);
+
                     context_switch(pFile, NULL, old, next, 1);
+
                     current = next;
                 }
             }
@@ -320,27 +384,32 @@ void RR(FILE *pFile, int quantum)
                     enqueue(ready_queue, pcb.id);
                 }
 
-                printf("[TIME %d] Quantum expired for P%d\n",
-                       getClk(), current->id);
+                if (!isEmpty(ready_queue))
+                {
+                    printf("[TIME %d] Quantum expired for P%d\n",
+                           getClk(), current->id);
 
-                //  ALWAYS enqueue current first
-                enqueue(ready_queue, current->id);
+                    //  ALWAYS enqueue current first
+                    enqueue(ready_queue, current->id);
 
-                PCB *old = current;
+                    PCB *old = current;
 
-                //  ALWAYS pick next (queue is guaranteed non-empty now)
-                int id = dequeue(ready_queue);
-                PCB *next = getPCB(id);
+                    //  ALWAYS pick next (queue is guaranteed non-empty now)
+                    int id = dequeue(ready_queue);
+                    PCB *next = getPCB(id);
 
+                    //  ALWAYS DO CONTEXT SWITCH
+                    context_switch(pFile, NULL, old, next, 1);
+
+                    current = next;
+                }
+                else
+                {
+                    printf("No other processes, continue\n");
+                }
                 quantum_counter = 0;
-
-                //  ALWAYS DO CONTEXT SWITCH
-                context_switch(pFile, NULL, old, next, 1);
-
-                current = next;
             }
         }
-        
     }
 
     freeQueue(ready_queue);
@@ -560,7 +629,7 @@ int main(int argc, char *argv[])
         }
         float avg_waiting_time = round(((float)total_waiting_time / number_of_processes) * 100) / 100;
         float avg_WTA_time = round(((float)total_WTA_time / number_of_processes) * 100) / 100;
-        float cpu_utilization = round(((float)total_runtime / (getClk()-1)) * 10000) / 100;
+        float cpu_utilization = round(((float)total_runtime / getClk()) * 10000) / 100;
         for (int i = 0; i < number_of_processes; i++)
         {
             std_WTA += pow(pcbs[i].WTA - avg_WTA_time, 2);
