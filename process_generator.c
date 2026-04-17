@@ -15,8 +15,14 @@ struct msgbuff
     struct processData p;
 };
 
+struct sharedData
+{
+    bool is_finished;
+};
+
 void clearResources(int);
 int msg_id;
+struct sharedData *shared;
 
 int main(int argc, char *argv[])
 {
@@ -109,8 +115,11 @@ int main(int argc, char *argv[])
             printf("current time is %d\n", x);
             msg_id = msgget(MSGKEY, IPC_CREAT | 0666);
             struct msgbuff message;
+            int shmid = shmget(SHKEY + 10, sizeof(struct sharedData), IPC_CREAT | 0666);
+            shared = (struct sharedData *)shmat(shmid, NULL, 0);
             for (int i = 0; i < number_of_processes; i++)
             {
+                shared->is_finished = false;
                 while (getClk() < p[i].arrivaltime)
                     ;
                 message.mtype = choice;
@@ -118,6 +127,7 @@ int main(int argc, char *argv[])
                 msgsnd(msg_id, &message, sizeof(struct processData), !IPC_NOWAIT);
                 printf("Sent P%d at %d\n", p[i].id, getClk());
             }
+            shared->is_finished = true;
             // TODO Generation Main Loop
             // 5. Create a data structure for processes and provide it with its parameters.
             // 6. Send the information to the scheduler at the appropriate time.
@@ -132,6 +142,7 @@ int main(int argc, char *argv[])
 void clearResources(int signum)
 {
     msgctl(msg_id, IPC_RMID, NULL);
+    shmdt(shared);
     printf("Process Generator terminating!\n");
     raise(SIGKILL);
 }

@@ -24,16 +24,23 @@ struct msgbuff
     struct processData p;
 };
 
+struct sharedData
+{
+    bool is_finished;
+};
+
 // Global PCB and state variables
 PCB pcbs[100];
 int finished_processes = 0;
-int number_of_processes;
+int number_of_processes = 0;
 int msg_id;
 Queue *ready_queue;
 int pcb_count = 0;
 PCB *current = NULL;
 int assigned_cpu[100]; // assigned[id] = 1 or 2 depending on which cpu the process is assigned to
 int finish_time[100];
+struct sharedData *shared;
+int shmid;
 
 PCB createPCB(struct processData p)
 {
@@ -118,7 +125,9 @@ void HPF(FILE *pFile)
 {
     struct msgbuff message;
     ready_queue = createQueue();
-    while (finished_processes < number_of_processes)
+    shmid = shmget(SHKEY + 10, sizeof(struct sharedData), IPC_CREAT | 0666);
+    shared = (struct sharedData *)shmat(shmid, NULL, 0);
+    while (!shared->is_finished || finished_processes < number_of_processes)
     {
         while (msgrcv(msg_id, &message, sizeof(struct processData), 1, IPC_NOWAIT) != -1)
         {
@@ -129,6 +138,7 @@ void HPF(FILE *pFile)
                    message.p.runningtime,
                    message.p.priority);
             PCB pcb = createPCB(message.p);
+            number_of_processes++;
             if (pcb.runtime == 0)
             {
                 printf("[TIME %d] P%d finished immediately\n", getClk(), pcb.id);
@@ -199,7 +209,7 @@ void HPF(FILE *pFile)
                            message.p.runningtime);
 
                     PCB pcb = createPCB(message.p);
-
+                    number_of_processes++;
                     if (pcb.runtime == 0)
                     {
                         printf("[TIME %d] P%d finished immediately\n",
@@ -235,10 +245,10 @@ void RR(FILE *pFile, int quantum)
     struct msgbuff message;
     ready_queue = createQueue();
     int quantum_counter = 0;
-
     current = NULL;
-
-    while (finished_processes < number_of_processes)
+    shmid = shmget(SHKEY + 10, sizeof(struct sharedData), IPC_CREAT | 0666);
+    shared = (struct sharedData *)shmat(shmid, NULL, 0);
+    while (!shared->is_finished || finished_processes < number_of_processes)
     {
         // ===== RECEIVE =====
         while (msgrcv(msg_id, &message, sizeof(struct processData), 2, IPC_NOWAIT) != -1)
@@ -247,7 +257,7 @@ void RR(FILE *pFile, int quantum)
                    getClk(), message.p.id, message.p.runningtime);
 
             PCB pcb = createPCB(message.p);
-
+            number_of_processes++;
             // handle runtime 0
             if (pcb.runtime == 0)
             {
@@ -335,7 +345,7 @@ void RR(FILE *pFile, int quantum)
                            message.p.runningtime);
 
                     PCB pcb = createPCB(message.p);
-
+                    number_of_processes++;
                     if (pcb.runtime == 0)
                     {
                         printf("[TIME %d] P%d finished immediately\n",
@@ -372,7 +382,7 @@ void RR(FILE *pFile, int quantum)
                            getClk(), message.p.id, message.p.runningtime);
 
                     PCB pcb = createPCB(message.p);
-
+                    number_of_processes++;
                     if (pcb.runtime == 0)
                     {
                         printf("[TIME %d] P%d finished immediately\n", getClk(), pcb.id);
@@ -440,7 +450,9 @@ void twoCPUWithFCFS(FILE *pFile, FILE *pFile2, int N, int M)
     int returnFromSwitch2 = 0;
     struct msgbuff message;
     int last_clk = 0;
-    while (finished_processes < number_of_processes)
+    shmid = shmget(SHKEY + 10, sizeof(struct sharedData), IPC_CREAT | 0666);
+    shared = (struct sharedData *)shmat(shmid, NULL, 0);
+    while (!shared->is_finished || finished_processes < number_of_processes)
     {
         while (msgrcv(msg_id, &message, sizeof(struct processData), 3, IPC_NOWAIT) != -1)
         {
@@ -448,6 +460,7 @@ void twoCPUWithFCFS(FILE *pFile, FILE *pFile2, int N, int M)
                    getClk(), message.p.id, message.p.runningtime);
             PCB pcb = createPCB(message.p);
             pcbs[pcb_count++] = pcb;
+            number_of_processes++;
             int size_1 = getSize(cpu1);
             int size_2 = getSize(cpu2);
             if (size_1 <= size_2)
@@ -623,6 +636,15 @@ void twoCPUWithFCFS(FILE *pFile, FILE *pFile2, int N, int M)
 ////////////////////////////////////////////////////////////
 // MAIN
 ////////////////////////////////////////////////////////////
+
+void handler(int signum)
+{
+    printf("Received SIGINT, exiting...\n");
+    shmdt(shared);
+    shmctl(shmid, IPC_RMID, NULL);
+    exit(0);
+}
+
 int main(int argc, char *argv[])
 {
     initClk();
@@ -633,8 +655,8 @@ int main(int argc, char *argv[])
         destroyClk(true);
         return -1;
     }
-
-    number_of_processes = atoi(argv[1]);
+    signal(SIGINT, handler);
+    // number_of_processes = atoi(argv[1]);
     int algo = atoi(argv[2]);
     int quantum = atoi(argv[3]);
     int N = atoi(argv[4]);
@@ -771,4 +793,3 @@ int main(int argc, char *argv[])
     destroyClk(true);
     return 0;
 }
-
