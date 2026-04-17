@@ -434,6 +434,10 @@ void twoCPUWithFCFS(FILE *pFile, FILE *pFile2, int N, int M)
     Queue *cpu2 = createQueue();
     PCB *cpu1_current = NULL;
     PCB *cpu2_current = NULL;
+    bool switch1 = false;
+    bool switch2 = false;
+    int returnFromSwitch1 = 0;
+    int returnFromSwitch2 = 0;
     struct msgbuff message;
     int last_clk = 0;
     while (finished_processes < number_of_processes)
@@ -512,10 +516,13 @@ void twoCPUWithFCFS(FILE *pFile, FILE *pFile2, int N, int M)
             printf("[TIME %d] CPU1 Running P%d (rem=%d)\n",
                    getClk(), cpu1_current->id, cpu1_current->remaining);
             cpu1_current->remaining--;
-            if (cpu1_current->remaining == 0)
+            if (cpu1_current->remaining < 0)
             {
+                cpu1_current->remaining = 0;
                 PCB *old = cpu1_current;
                 waitpid(cpu1_current->pid, NULL, 0);
+                switch1 = true;
+                returnFromSwitch1 = getClk() + 1;
                 finish_time[cpu1_current->id] = getClk();
                 finished_processes++;
                 printf("finished processes: %d\n", finished_processes);
@@ -529,10 +536,26 @@ void twoCPUWithFCFS(FILE *pFile, FILE *pFile2, int N, int M)
                 cpu1_current = NULL;
                 if (!isEmpty(cpu1))
                 {
-                    int id = dequeue(cpu1);
-                    PCB *next = getPCB(id);
-                    context_switch(pFile, pFile2, old, next, 1);
-                    cpu1_current = next;
+                    if (!switch1)
+                    {
+                        // context_switch(pFile, pFile2, old, next, 1);
+                        int id = dequeue(cpu1);
+                        PCB *next = getPCB(id);
+                        int waiting_time = getClk() - next->arrival - (next->runtime - next->remaining);
+                        fprintf(pFile, "At\ttime\t%d\tprocess\t%d\tstarted\tarr\t%d\ttotal\t%d\tremain\t%d\twait\t%d\n", getClk(), next->id, next->arrival, next->runtime, next->remaining, waiting_time);
+                        int pid = fork();
+                        if (pid == 0)
+                        {
+                            char remaining_time[10];
+                            sprintf(remaining_time, "%d", next->remaining);
+                            execl("./process.out", "process.out", remaining_time, NULL);
+                        }
+                        cpu1_current = next;
+                    }
+                    else if (returnFromSwitch1 <= getClk())
+                    {
+                        switch1 = false;
+                    }
                 }
             }
         }
@@ -549,10 +572,13 @@ void twoCPUWithFCFS(FILE *pFile, FILE *pFile2, int N, int M)
             printf("[TIME %d] CPU2 Running P%d (rem=%d)\n",
                    getClk(), cpu2_current->id, cpu2_current->remaining);
             cpu2_current->remaining--;
-            if (cpu2_current->remaining == 0)
+            if (cpu2_current->remaining < 0)
             {
+                cpu2_current->remaining = 0;
                 PCB *old = cpu2_current;
                 waitpid(cpu2_current->pid, NULL, 0);
+                switch2 = true;
+                returnFromSwitch2 = getClk() + 1;
                 finish_time[cpu2_current->id] = getClk();
                 finished_processes++;
                 printf("finished processes: %d\n", finished_processes);
@@ -566,10 +592,25 @@ void twoCPUWithFCFS(FILE *pFile, FILE *pFile2, int N, int M)
                 cpu2_current = NULL;
                 if (!isEmpty(cpu2))
                 {
-                    int id = dequeue(cpu2);
-                    PCB *next = getPCB(id);
-                    context_switch(pFile, pFile2, old, next, 2);
-                    cpu2_current = next;
+                    if (!switch2)
+                    {
+                        int id = dequeue(cpu2);
+                        PCB *next = getPCB(id);
+                        int waiting_time = getClk() - next->arrival - (next->runtime - next->remaining);
+                        fprintf(pFile2, "At\ttime\t%d\tprocess\t%d\tstarted\tarr\t%d\ttotal\t%d\tremain\t%d\twait\t%d\n", getClk(), next->id, next->arrival, next->runtime, next->remaining, waiting_time);
+                        int pid = fork();
+                        if (pid == 0)
+                        {
+                            char remaining_time[10];
+                            sprintf(remaining_time, "%d", next->remaining);
+                            execl("./process.out", "process.out", remaining_time, NULL);
+                        }
+                        cpu2_current = next;
+                    }
+                    else if (returnFromSwitch2 <= getClk())
+                    {
+                        switch2 = false;
+                    }
                 }
             }
         }
@@ -604,7 +645,7 @@ int main(int argc, char *argv[])
     if (algo == 1 || algo == 2)
     {
         FILE *pFile;
-        pFile = fopen("schedulerLog.txt", "w");
+        pFile = fopen("scheduler.log", "w");
         fprintf(pFile, "#At\ttime\tx\tprocess\ty\tstate\tarr\tw\ttotal\tz\tremain\ty\twait\tk\n");
         if (algo == 1)
         {
@@ -635,7 +676,7 @@ int main(int argc, char *argv[])
             std_WTA += pow(pcbs[i].WTA - avg_WTA_time, 2);
         }
         std_WTA = round((sqrt(std_WTA / number_of_processes)) * 100) / 100;
-        pFile = fopen("schedulerPerf.txt", "w");
+        pFile = fopen("scheduler.perf", "w");
         fprintf(pFile, "CPU utilization = %.2f%%\n", cpu_utilization);
         fprintf(pFile, "Avg WTA = %.2f\n", avg_WTA_time);
         fprintf(pFile, "Avg Waiting = %.2f\n", avg_waiting_time);
@@ -645,10 +686,10 @@ int main(int argc, char *argv[])
     else if (algo == 3)
     {
         FILE *pFile1;
-        pFile1 = fopen("scheduler_1Log.txt", "w");
+        pFile1 = fopen("scheduler_1.log", "w");
         fprintf(pFile1, "#At\ttime\tx\tprocess\ty\tstate\tarr\tw\ttotal\tz\tremain\ty\twait\tk\n");
         FILE *pFile2;
-        pFile2 = fopen("scheduler_2Log.txt", "w");
+        pFile2 = fopen("scheduler_2.log", "w");
         fprintf(pFile2, "#At\ttime\tx\tprocess\ty\tstate\tarr\tw\ttotal\tz\tremain\ty\twait\tk\n");
         // 2cpu + FCFS
         twoCPUWithFCFS(pFile1, pFile2, N, M);
@@ -708,8 +749,8 @@ int main(int argc, char *argv[])
         }
         cpu1_std_wta = round((sqrt(cpu1_std_wta / cpu1_count)) * 100) / 100;
         cpu2_std_wta = round((sqrt(cpu2_std_wta / cpu2_count)) * 100) / 100;
-        pFile1 = fopen("scheduler_1Perf.txt", "w");
-        pFile2 = fopen("scheduler_2Perf.txt", "w");
+        pFile1 = fopen("scheduler_1.perf", "w");
+        pFile2 = fopen("scheduler_2.perf", "w");
         fprintf(pFile1, "CPU utilization = %.2f%%\n", cpu1_utilization);
         fprintf(pFile1, "Avg WTA = %.2f\n", cpu1_avg_wta);
         fprintf(pFile1, "Avg Waiting = %.2f\n", cpu1_avg_wait);
@@ -730,3 +771,4 @@ int main(int argc, char *argv[])
     destroyClk(true);
     return 0;
 }
+

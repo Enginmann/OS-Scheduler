@@ -95,7 +95,7 @@ static inline void printQueue(Queue *q)
     printf("Queue: ");
     while (cur)
     {
-        printf("P%d(%d) -> ", cur->id, cur->priority);
+        printf("P%d -> ", cur->id);
         cur = cur->next;
     }
     printf("NULL\n");
