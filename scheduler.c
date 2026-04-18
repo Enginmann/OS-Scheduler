@@ -29,7 +29,7 @@ struct sharedData
     bool is_finished;
 };
 
-// Global PCB and state variables
+
 PCB pcbs[100];
 int finished_processes = 0;
 int number_of_processes = 0;
@@ -37,7 +37,7 @@ int msg_id;
 Queue *ready_queue;
 int pcb_count = 0;
 PCB *current = NULL;
-int assigned_cpu[100]; // assigned[id] = 1 or 2 depending on which cpu the process is assigned to
+int assigned_cpu[100]; 
 int finish_time[100];
 struct sharedData *shared;
 int shmid;
@@ -169,7 +169,6 @@ void HPF(FILE *pFile)
                 current = next;
             }
         }
-        // pick next process if current is NULL
         if (current == NULL && !isEmpty(ready_queue))
         {
             int id = dequeue(ready_queue);
@@ -178,7 +177,6 @@ void HPF(FILE *pFile)
             context_switch(pFile, NULL, NULL, next, 1);
             current = next;
         }
-        // run current process
         if (current != NULL)
         {
             printf("[TIME %d] Running P%d (remaining=%d)\n",
@@ -236,9 +234,6 @@ void HPF(FILE *pFile)
     freeQueue(ready_queue);
 }
 
-////////////////////////////////////////////////////////////
-// ROUND ROBIN ALGORITHM
-////////////////////////////////////////////////////////////
 
 void RR(FILE *pFile, int quantum)
 {
@@ -250,7 +245,6 @@ void RR(FILE *pFile, int quantum)
     shared = (struct sharedData *)shmat(shmid, NULL, 0);
     while (!shared->is_finished || finished_processes < number_of_processes)
     {
-        // ===== RECEIVE =====
         while (msgrcv(msg_id, &message, sizeof(struct processData), 2, IPC_NOWAIT) != -1)
         {
             printf("[TIME %d] Received P%d (run=%d)\n",
@@ -258,7 +252,6 @@ void RR(FILE *pFile, int quantum)
 
             PCB pcb = createPCB(message.p);
             number_of_processes++;
-            // handle runtime 0
             if (pcb.runtime == 0)
             {
                 printf("[TIME %d] P%d finished immediately\n", getClk(), pcb.id);
@@ -276,7 +269,6 @@ void RR(FILE *pFile, int quantum)
             enqueue(ready_queue, pcb.id);
         }
 
-        // ===== PICK =====
         if (current == NULL && !isEmpty(ready_queue))
         {
             int id = dequeue(ready_queue);
@@ -288,8 +280,6 @@ void RR(FILE *pFile, int quantum)
             current = next;
             quantum_counter = 0;
         }
-
-        // ===== RUN =====
         if (current != NULL)
         {
             printf("[TIME %d] Running P%d (remaining=%d, q=%d/%d)\n",
@@ -302,23 +292,17 @@ void RR(FILE *pFile, int quantum)
             sleep(1);
             current->remaining--;
             quantum_counter++;
-
-            // ===== FINISH =====
             if (current->remaining == 0)
             {
                 PCB *old = current;
-
                 printf("[TIME %d] FINISH P%d\n",
                        getClk(), current->id);
 
                 waitpid(current->pid, NULL, 0);
-
                 finished_processes++;
-
                 int waiting_time = getClk() - current->arrival - current->runtime;
                 int TA = getClk() - current->arrival;
                 float WTA = round(((float)TA / current->runtime) * 100) / 100;
-
                 current->waiting_time = waiting_time;
                 current->WTA = WTA;
 
@@ -335,8 +319,6 @@ void RR(FILE *pFile, int quantum)
 
                 current = NULL;
                 quantum_counter = 0;
-
-                // IMPORTANT: receive same-timestep arrivals BEFORE picking next process
                 while (msgrcv(msg_id, &message, sizeof(struct processData), 2, IPC_NOWAIT) != -1)
                 {
                     printf("[TIME %d] Received P%d (run=%d)\n",
@@ -359,8 +341,6 @@ void RR(FILE *pFile, int quantum)
                     pcbs[pcb_count++] = pcb;
                     enqueue(ready_queue, pcb.id);
                 }
-
-                // NOW decide next process
                 if (!isEmpty(ready_queue))
                 {
                     int id = dequeue(ready_queue);
@@ -372,10 +352,8 @@ void RR(FILE *pFile, int quantum)
                 }
             }
 
-            // ===== QUANTUM EXPIRE =====
             else if (quantum_counter == quantum)
             {
-                //  RECEIVE first (same-cycle arrivals)
                 while (msgrcv(msg_id, &message, sizeof(struct processData), 2, IPC_NOWAIT) != -1)
                 {
                     printf("[TIME %d] Received P%d (run=%d)\n",
@@ -399,16 +377,10 @@ void RR(FILE *pFile, int quantum)
                     printf("[TIME %d] Quantum expired for P%d\n",
                            getClk(), current->id);
 
-                    //  ALWAYS enqueue current first
                     enqueue(ready_queue, current->id);
-
                     PCB *old = current;
-
-                    //  ALWAYS pick next (queue is guaranteed non-empty now)
                     int id = dequeue(ready_queue);
                     PCB *next = getPCB(id);
-
-                    //  ALWAYS DO CONTEXT SWITCH
                     context_switch(pFile, NULL, old, next, 1);
 
                     current = next;
@@ -551,7 +523,6 @@ void twoCPUWithFCFS(FILE *pFile, FILE *pFile2, int N, int M)
                 {
                     if (!switch1)
                     {
-                        // context_switch(pFile, pFile2, old, next, 1);
                         int id = dequeue(cpu1);
                         PCB *next = getPCB(id);
                         int waiting_time = getClk() - next->arrival - (next->runtime - next->remaining);
@@ -633,10 +604,6 @@ void twoCPUWithFCFS(FILE *pFile, FILE *pFile2, int N, int M)
     freeQueue(cpu2);
 }
 
-////////////////////////////////////////////////////////////
-// MAIN
-////////////////////////////////////////////////////////////
-
 void handler(int signum)
 {
     printf("Received SIGINT, exiting...\n");
@@ -656,7 +623,6 @@ int main(int argc, char *argv[])
         return -1;
     }
     signal(SIGINT, handler);
-    // number_of_processes = atoi(argv[1]);
     int algo = atoi(argv[2]);
     int quantum = atoi(argv[3]);
     int N = atoi(argv[4]);
@@ -752,10 +718,10 @@ int main(int argc, char *argv[])
         }
         float cpu1_utilization = (last1 ? (round(((float)cpu1_runtime / last1) * 10000) / 100) : 0);
         float cpu2_utilization = (last2 ? (round(((float)cpu2_runtime / last2) * 10000) / 100) : 0);
-        float cpu1_avg_wta = round(((float)cpu1_wta_sum / cpu1_count) * 100) / 100;
-        float cpu2_avg_wta = round(((float)cpu2_wta_sum / cpu2_count) * 100) / 100;
-        float cpu1_avg_wait = round(((float)cpu1_wait_sum / cpu1_count) * 100) / 100;
-        float cpu2_avg_wait = round(((float)cpu2_wait_sum / cpu2_count) * 100) / 100;
+        float cpu1_avg_wta = (cpu1_count ? (round(((float)cpu1_wta_sum / cpu1_count) * 100) / 100) : 0);
+        float cpu2_avg_wta = (cpu2_count ? (round(((float)cpu2_wta_sum / cpu2_count) * 100) / 100) : 0);
+        float cpu1_avg_wait = (cpu1_count ? (round(((float)cpu1_wait_sum / cpu1_count) * 100) / 100) : 0);
+        float cpu2_avg_wait = (cpu2_count ? (round(((float)cpu2_wait_sum / cpu2_count) * 100) / 100) : 0);
         float cpu1_std_wta = 0, cpu2_std_wta = 0;
         for (int i = 0; i < number_of_processes; i++)
         {
@@ -769,8 +735,8 @@ int main(int argc, char *argv[])
                 cpu2_std_wta += pow(pcbs[i].WTA - cpu2_avg_wta, 2);
             }
         }
-        cpu1_std_wta = round((sqrt(cpu1_std_wta / cpu1_count)) * 100) / 100;
-        cpu2_std_wta = round((sqrt(cpu2_std_wta / cpu2_count)) * 100) / 100;
+        cpu1_std_wta = (cpu1_count ? (round((sqrt(cpu1_std_wta / cpu1_count)) * 100) / 100) : 0);
+        cpu2_std_wta = (cpu2_count ? (round((sqrt(cpu2_std_wta / cpu2_count)) * 100) / 100) : 0);
         pFile1 = fopen("scheduler_1.perf", "w");
         pFile2 = fopen("scheduler_2.perf", "w");
         fprintf(pFile1, "CPU utilization = %.2f%%\n", cpu1_utilization);

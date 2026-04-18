@@ -109,9 +109,9 @@ static inline int getSize(Queue *q)
 static inline int dequeueLast(Queue *q)
 {
     if (q->front == NULL)
-        return -1; // empty queue
+        return -1; 
 
-    // Case 1: only ONE element
+    
     if (q->front == q->rear)
     {
         int id = q->front->id;
@@ -120,25 +120,16 @@ static inline int dequeueLast(Queue *q)
         q->size--;
         return id;
     }
-
-    // Case 2: more than one element
     QNode *temp = q->front;
-
-    // move until second last
     while (temp->next != q->rear)
     {
         temp = temp->next;
     }
-
-    // temp now points to second last
     int id = q->rear->id;
-
     free(q->rear);
     q->rear = temp;
     q->rear->next = NULL;
-
     q->size--;
-
     return id;
 }
 

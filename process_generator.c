@@ -27,8 +27,6 @@ struct sharedData *shared;
 int main(int argc, char *argv[])
 {
     signal(SIGINT, clearResources);
-    // TODO Initialization
-    // 1. Read the input files.
     FILE *file = fopen("processes.txt", "r");
     if (!file)
     {
@@ -68,7 +66,6 @@ int main(int argc, char *argv[])
     }
 
     fclose(file);
-    // 2. Ask the user for the chosen scheduling algorithm and its parameters, if there are any.
     printf("Choose a scheduling algorithm:\n");
     printf("1. Preemptive Highest Priority First (HPF)\n");
     printf("2. Round Robin (RR)\n");
@@ -91,8 +88,6 @@ int main(int argc, char *argv[])
         printf("Enter N and M: ");
         scanf("%s %s", n_char, m_char);
     }
-    // 3. Initiate and create the scheduler and clock processes.
-    // 4. Use this function after creating the clock process to initialize clock
     int sched_pid = fork();
     if (sched_pid == 0)
     {
@@ -110,7 +105,6 @@ int main(int argc, char *argv[])
         {
 
             initClk();
-            // To get time use this
             int x = getClk();
             printf("current time is %d\n", x);
             msg_id = msgget(MSGKEY, IPC_CREAT | 0666);
@@ -128,10 +122,6 @@ int main(int argc, char *argv[])
                 printf("Sent P%d at %d\n", p[i].id, getClk());
             }
             shared->is_finished = true;
-            // TODO Generation Main Loop
-            // 5. Create a data structure for processes and provide it with its parameters.
-            // 6. Send the information to the scheduler at the appropriate time.
-            // 7. Clear clock resources
             int stat_loc;
             waitpid(sched_pid, &stat_loc, 0);
             destroyClk(true);
