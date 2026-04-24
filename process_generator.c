@@ -7,6 +7,8 @@ struct processData
     int runningtime;
     int remainingtime;
     int id;
+    int base;
+    int limit;
 };
 
 struct msgbuff
@@ -19,6 +21,46 @@ struct sharedData
 {
     bool is_finished;
 };
+
+struct Request
+{
+    int time;
+    int address;
+    char mode;
+};
+
+struct Request requests[100];
+int req_count = 0;
+int req_index = 0;
+
+void load_requests(int pid)
+{
+    char filename[20];
+    sprintf(filename, "requests_%d.txt", pid);
+
+    FILE *f = fopen(filename, "r");
+    req_count = 0;
+
+    char line[100];
+    while (fgets(line, sizeof(line), f))
+    {
+        if (line[0] == '#')
+            continue;
+
+        int t;
+        char addr[20], mode;
+
+        sscanf(line, "%d %s %c", &t, addr, &mode);
+
+        requests[req_count].time = t;
+        requests[req_count].address = (int)strtol(addr, NULL, 2);
+        requests[req_count].mode = mode;
+
+        req_count++;
+    }
+
+    fclose(f);
+}
 
 void clearResources(int);
 int msg_id;
@@ -53,35 +95,42 @@ int main(int argc, char *argv[])
         if (line[0] == '#' || line[0] == '\n')
             continue;
 
-        int id, arrival, runtime, priority;
+        int id, arrival, runtime, priority, base, limit;
 
-        sscanf(line, "%d\t%d\t%d\t%d", &id, &arrival, &runtime, &priority);
+        sscanf(line, "%d\t%d\t%d\t%d\t%d\t%d", &id, &arrival, &runtime, &priority, &base, &limit);
 
         p[i].id = id;
         p[i].arrivaltime = arrival;
         p[i].runningtime = runtime;
         p[i].remainingtime = runtime;
         p[i].priority = priority;
+        p[i].base = base;
+        p[i].limit = limit;
         i++;
     }
 
     fclose(file);
+    for (int i = 0; i < number_of_processes; i++)
+    {
+        load_requests(p[i].id);
+    }
     printf("Choose a scheduling algorithm:\n");
     printf("1. Preemptive Highest Priority First (HPF)\n");
     printf("2. Round Robin (RR)\n");
     printf("3. 2-CPUs (FCFS)\n");
     int choice;
     scanf("%d", &choice);
-    char count_of_processes[10], algo_char[10], q_char[10], n_char[10], m_char[10];
+    char count_of_processes[10], algo_char[10], q_char[10], k_char[10], n_char[10], m_char[10];
     sprintf(algo_char, "%d", choice);
     sprintf(q_char, "0");
+    sprintf(k_char, "0");
     sprintf(n_char, "0");
     sprintf(m_char, "0");
     sprintf(count_of_processes, "%d", number_of_processes);
     if (choice == 2)
     {
-        printf("Enter quantum: ");
-        scanf("%s", q_char);
+        printf("Enter quantum q and k: ");
+        scanf("%s %s", q_char, k_char);
     }
     else if (choice == 3)
     {
@@ -91,7 +140,7 @@ int main(int argc, char *argv[])
     int sched_pid = fork();
     if (sched_pid == 0)
     {
-        execl("./scheduler.out", "scheduler.out", count_of_processes, algo_char, q_char, n_char, m_char, NULL);
+        execl("./scheduler.out", "scheduler.out", count_of_processes, algo_char, q_char, k_char, n_char, m_char, NULL);
         exit(0);
     }
     else

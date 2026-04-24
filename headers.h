@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <signal.h>
+#include "MMU.h"
 
 typedef short bool;
 #define true 1
@@ -34,6 +35,11 @@ typedef struct PCB
     int priority;
     int waiting_time;
     float WTA;
+    int base;
+    int limit;
+    int cpu_time;           // used for request timing
+    int blocked_until;
+    PageTable page_table;
 } PCB;
 
 int getClk()

@@ -1,5 +1,6 @@
 #include "headers.h"
 #include "queue.h"
+#include "MMU.h"
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <sys/wait.h>
@@ -29,6 +30,12 @@ struct sharedData
     bool is_finished;
 };
 
+struct MemRequest
+{
+    int time;
+    int address;
+    char mode;
+};
 
 PCB pcbs[100];
 int finished_processes = 0;
@@ -37,10 +44,15 @@ int msg_id;
 Queue *ready_queue;
 int pcb_count = 0;
 PCB *current = NULL;
-int assigned_cpu[100]; 
+int assigned_cpu[100];
 int finish_time[100];
 struct sharedData *shared;
 int shmid;
+FILE *memFile;
+Queue *blocked_queue;
+int req_index = 0;
+int req_count = 0;
+struct MemRequest requests[1000];
 
 PCB createPCB(struct processData p)
 {
@@ -51,6 +63,11 @@ PCB createPCB(struct processData p)
     pcb.runtime = p.runningtime;
     pcb.remaining = p.runningtime;
     pcb.priority = p.priority;
+    // Phase 2 additions
+    pcb.cpu_time = 0;
+    pcb.blocked_until = 0;
+    pcb.base = pcb.id * 100;
+    init_page_table(&pcb.page_table);
     return pcb;
 }
 
@@ -118,6 +135,96 @@ void context_switch(FILE *pFile, FILE *pFile2, PCB *old, PCB *new, int number_of
         int waiting_time = getClk() - new->arrival - (new->runtime - new->remaining);
         fprintf(pFile, "At\ttime\t%d\tprocess\t%d\tresumed\tarr\t%d\ttotal\t%d\tremain\t%d\twait\t%d\n", getClk(), new->id, new->arrival, new->runtime, new->remaining, waiting_time);
         kill(new->pid, SIGCONT);
+    }
+}
+
+int access_memory(PCB *p, FILE *memFile)
+{
+    if (req_index >= req_count)
+        return 1;
+
+    if (requests[req_index].time != p->cpu_time)
+        return 1;
+
+    int va = requests[req_index].address;
+    char mode = requests[req_index].mode;
+
+    int page = va / PAGE_SIZE;
+
+    PageTableEntry *entry = &p->page_table.pages[page];
+
+    printf("[MMU] P%d requests VA=%d (page %d)\n", p->id, va, page);
+
+    // HIT
+    if (entry->valid)
+    {
+        printf("[MMU] HIT in frame %d\n", entry->frame_number);
+
+        memory[entry->frame_number].R = 1;
+        if (mode == 'w')
+            memory[entry->frame_number].M = 1;
+
+        req_index++;
+        return 1;
+    }
+
+    // PAGE FAULT
+    printf("[MMU] PAGE FAULT\n");
+
+    fprintf(memFile, "PageFault upon VA %d from process %d\n", va, p->id);
+
+    int frame = allocateFrame();
+
+    if (frame == -1)
+    {
+        frame = nru_replace();
+
+        if (memory[frame].M)
+        {
+            fprintf(memFile, "Swapping out page %d to disk\n", frame);
+            sleep(10);
+        }
+    }
+    else
+    {
+        fprintf(memFile, "Free Physical page %d allocated\n", frame);
+    }
+
+    sleep(10);
+
+    memory[frame].occupied = 1;
+    memory[frame].process_id = p->id;
+    memory[frame].page_number = page;
+    memory[frame].R = 1;
+    memory[frame].M = (mode == 'w');
+
+    entry->valid = 1;
+    entry->frame_number = frame;
+
+    fprintf(memFile,
+            "At time %d disk address %d for process %d is loaded into memory page %d\n",
+            getClk(), p->base + page, p->id, frame);
+
+    req_index++;
+    return 0;
+}
+
+void check_blocked()
+{
+    QNode *cur = blocked_queue->front;
+    QNode *next;
+    while (cur)
+    {
+        next = cur->next; // save next BEFORE removal
+        PCB *p = getPCB(cur->id);
+        if (getClk() >= p->blocked_until)
+        {
+            printf("[TIME %d] UNBLOCK P%d\n", getClk(), p->id);
+
+            enqueue(ready_queue, p->id);
+            removeFromQueue(blocked_queue, p->id);
+        }
+        cur = cur->next;
     }
 }
 
@@ -234,8 +341,7 @@ void HPF(FILE *pFile)
     freeQueue(ready_queue);
 }
 
-
-void RR(FILE *pFile, int quantum)
+void RR(FILE *pFile, int quantum, int k)
 {
     struct msgbuff message;
     ready_queue = createQueue();
@@ -243,8 +349,10 @@ void RR(FILE *pFile, int quantum)
     current = NULL;
     shmid = shmget(SHKEY + 10, sizeof(struct sharedData), IPC_CREAT | 0666);
     shared = (struct sharedData *)shmat(shmid, NULL, 0);
+    memFile = fopen("memory.log", "w");
     while (!shared->is_finished || finished_processes < number_of_processes)
     {
+        check_blocked();
         while (msgrcv(msg_id, &message, sizeof(struct processData), 2, IPC_NOWAIT) != -1)
         {
             printf("[TIME %d] Received P%d (run=%d)\n",
@@ -280,120 +388,148 @@ void RR(FILE *pFile, int quantum)
             current = next;
             quantum_counter = 0;
         }
+        // if (current != NULL)
+        // {
+        //     printf("[TIME %d] Running P%d (remaining=%d, q=%d/%d)\n",
+        //            getClk(),
+        //            current->id,
+        //            current->remaining,
+        //            quantum_counter,
+        //            quantum);
+
+        //     sleep(1);
+        //     current->remaining--;
+        //     quantum_counter++;
+        //     if (current->remaining == 0)
+        //     {
+        //         PCB *old = current;
+        //         printf("[TIME %d] FINISH P%d\n",
+        //                getClk(), current->id);
+
+        //         waitpid(current->pid, NULL, 0);
+        //         finished_processes++;
+        //         int waiting_time = getClk() - current->arrival - current->runtime;
+        //         int TA = getClk() - current->arrival;
+        //         float WTA = round(((float)TA / current->runtime) * 100) / 100;
+        //         current->waiting_time = waiting_time;
+        //         current->WTA = WTA;
+
+        //         fprintf(pFile,
+        //                 "At\ttime\t%d\tprocess\t%d\tfinished\tarr\t%d\ttotal\t%d\tremain\t%d\twait\t%d\tTA\t%d\tWTA\t%.2f\n",
+        //                 getClk(),
+        //                 current->id,
+        //                 current->arrival,
+        //                 current->runtime,
+        //                 current->remaining,
+        //                 waiting_time,
+        //                 TA,
+        //                 WTA);
+
+        //         current = NULL;
+        //         quantum_counter = 0;
+        //         while (msgrcv(msg_id, &message, sizeof(struct processData), 2, IPC_NOWAIT) != -1)
+        //         {
+        //             printf("[TIME %d] Received P%d (run=%d)\n",
+        //                    getClk(),
+        //                    message.p.id,
+        //                    message.p.runningtime);
+
+        //             PCB pcb = createPCB(message.p);
+        //             number_of_processes++;
+        //             if (pcb.runtime == 0)
+        //             {
+        //                 printf("[TIME %d] P%d finished immediately\n",
+        //                        getClk(),
+        //                        pcb.id);
+
+        //                 finished_processes++;
+        //                 continue;
+        //             }
+
+        //             pcbs[pcb_count++] = pcb;
+        //             enqueue(ready_queue, pcb.id);
+        //         }
+        //         if (!isEmpty(ready_queue))
+        //         {
+        //             int id = dequeue(ready_queue);
+        //             PCB *next = getPCB(id);
+
+        //             context_switch(pFile, NULL, old, next, 1);
+
+        //             current = next;
+        //         }
+        //     }
+
+        //     else if (quantum_counter == quantum)
+        //     {
+        //         while (msgrcv(msg_id, &message, sizeof(struct processData), 2, IPC_NOWAIT) != -1)
+        //         {
+        //             printf("[TIME %d] Received P%d (run=%d)\n",
+        //                    getClk(), message.p.id, message.p.runningtime);
+
+        //             PCB pcb = createPCB(message.p);
+        //             number_of_processes++;
+        //             if (pcb.runtime == 0)
+        //             {
+        //                 printf("[TIME %d] P%d finished immediately\n", getClk(), pcb.id);
+        //                 finished_processes++;
+        //                 continue;
+        //             }
+
+        //             pcbs[pcb_count++] = pcb;
+        //             enqueue(ready_queue, pcb.id);
+        //         }
+
+        //         if (!isEmpty(ready_queue))
+        //         {
+        //             printf("[TIME %d] Quantum expired for P%d\n",
+        //                    getClk(), current->id);
+
+        //             enqueue(ready_queue, current->id);
+        //             PCB *old = current;
+        //             int id = dequeue(ready_queue);
+        //             PCB *next = getPCB(id);
+        //             context_switch(pFile, NULL, old, next, 1);
+
+        //             current = next;
+        //         }
+        //         else
+        //         {
+        //             printf("No other processes, continue\n");
+        //         }
+        //         quantum_counter = 0;
+        //     }
+        // }
         if (current != NULL)
         {
-            printf("[TIME %d] Running P%d (remaining=%d, q=%d/%d)\n",
-                   getClk(),
-                   current->id,
-                   current->remaining,
-                   quantum_counter,
-                   quantum);
+            printf("[TIME %d] Running P%d\n", getClk(), current->id);
+
+            current->cpu_time++;
+
+            // MEMORY ACCESS
+            if (!access_memory(current, memFile))
+            {
+                current->blocked_until = getClk() + 10;
+
+                printf("[TIME %d] BLOCK P%d until %d\n", getClk(), current->id, current->blocked_until);
+
+                enqueue(blocked_queue, current->id);
+                current = NULL;
+                continue;
+            }
 
             sleep(1);
             current->remaining--;
-            quantum_counter++;
+
             if (current->remaining == 0)
             {
-                PCB *old = current;
-                printf("[TIME %d] FINISH P%d\n",
-                       getClk(), current->id);
-
-                waitpid(current->pid, NULL, 0);
+                printf("[TIME %d] FINISH P%d\n", getClk(), current->id);
                 finished_processes++;
-                int waiting_time = getClk() - current->arrival - current->runtime;
-                int TA = getClk() - current->arrival;
-                float WTA = round(((float)TA / current->runtime) * 100) / 100;
-                current->waiting_time = waiting_time;
-                current->WTA = WTA;
-
-                fprintf(pFile,
-                        "At\ttime\t%d\tprocess\t%d\tfinished\tarr\t%d\ttotal\t%d\tremain\t%d\twait\t%d\tTA\t%d\tWTA\t%.2f\n",
-                        getClk(),
-                        current->id,
-                        current->arrival,
-                        current->runtime,
-                        current->remaining,
-                        waiting_time,
-                        TA,
-                        WTA);
-
                 current = NULL;
-                quantum_counter = 0;
-                while (msgrcv(msg_id, &message, sizeof(struct processData), 2, IPC_NOWAIT) != -1)
-                {
-                    printf("[TIME %d] Received P%d (run=%d)\n",
-                           getClk(),
-                           message.p.id,
-                           message.p.runningtime);
-
-                    PCB pcb = createPCB(message.p);
-                    number_of_processes++;
-                    if (pcb.runtime == 0)
-                    {
-                        printf("[TIME %d] P%d finished immediately\n",
-                               getClk(),
-                               pcb.id);
-
-                        finished_processes++;
-                        continue;
-                    }
-
-                    pcbs[pcb_count++] = pcb;
-                    enqueue(ready_queue, pcb.id);
-                }
-                if (!isEmpty(ready_queue))
-                {
-                    int id = dequeue(ready_queue);
-                    PCB *next = getPCB(id);
-
-                    context_switch(pFile, NULL, old, next, 1);
-
-                    current = next;
-                }
-            }
-
-            else if (quantum_counter == quantum)
-            {
-                while (msgrcv(msg_id, &message, sizeof(struct processData), 2, IPC_NOWAIT) != -1)
-                {
-                    printf("[TIME %d] Received P%d (run=%d)\n",
-                           getClk(), message.p.id, message.p.runningtime);
-
-                    PCB pcb = createPCB(message.p);
-                    number_of_processes++;
-                    if (pcb.runtime == 0)
-                    {
-                        printf("[TIME %d] P%d finished immediately\n", getClk(), pcb.id);
-                        finished_processes++;
-                        continue;
-                    }
-
-                    pcbs[pcb_count++] = pcb;
-                    enqueue(ready_queue, pcb.id);
-                }
-
-                if (!isEmpty(ready_queue))
-                {
-                    printf("[TIME %d] Quantum expired for P%d\n",
-                           getClk(), current->id);
-
-                    enqueue(ready_queue, current->id);
-                    PCB *old = current;
-                    int id = dequeue(ready_queue);
-                    PCB *next = getPCB(id);
-                    context_switch(pFile, NULL, old, next, 1);
-
-                    current = next;
-                }
-                else
-                {
-                    printf("No other processes, continue\n");
-                }
-                quantum_counter = 0;
             }
         }
     }
-
+    fclose(memFile);
     freeQueue(ready_queue);
 }
 
@@ -625,8 +761,9 @@ int main(int argc, char *argv[])
     signal(SIGINT, handler);
     int algo = atoi(argv[2]);
     int quantum = atoi(argv[3]);
-    int N = atoi(argv[4]);
-    int M = atoi(argv[5]);
+    int k = atoi(argv[4]);
+    int N = atoi(argv[5]);
+    int M = atoi(argv[6]);
 
     msg_id = msgget(MSGKEY, IPC_CREAT | 0666);
 
@@ -643,7 +780,7 @@ int main(int argc, char *argv[])
         else if (algo == 2)
         {
             // RR
-            RR(pFile, quantum);
+            RR(pFile, quantum, k);
         }
         fclose(pFile);
         int total_waiting_time = 0;

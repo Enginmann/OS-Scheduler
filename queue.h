@@ -133,6 +133,44 @@ static inline int dequeueLast(Queue *q)
     return id;
 }
 
+static inline void removeFromQueue(Queue *q, int id)
+{
+    if (q == NULL || q->front == NULL)
+        return;
+
+    QNode *current = q->front;
+    QNode *prev = NULL;
+
+    while (current != NULL)
+    {
+        if (current->id == id)
+        {
+            // Case 1: removing front
+            if (prev == NULL)
+            {
+                q->front = current->next;
+
+                if (q->front == NULL)
+                    q->rear = NULL; // queue became empty
+            }
+            else
+            {
+                prev->next = current->next;
+
+                // Case 2: removing rear
+                if (current == q->rear)
+                    q->rear = prev;
+            }
+
+            free(current);
+            return; // remove only first match
+        }
+
+        prev = current;
+        current = current->next;
+    }
+}
+
 static inline void freeQueue(Queue *q) {
     while (!isEmpty(q)) dequeue(q);
     free(q);
