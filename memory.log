@@ -1,0 +1,12 @@
+PageFault upon VA 0 from process 1
+At time 11 page loaded for process 1 into frame 0
+PageFault upon VA 0 from process 2
+At time 21 page loaded for process 2 into frame 1
+PageFault upon VA 16 from process 1
+At time 31 page loaded for process 1 into frame 2
+PageFault upon VA 16 from process 2
+At time 41 page loaded for process 2 into frame 3
+PageFault upon VA 32 from process 1
+At time 51 page loaded for process 1 into frame 4
+PageFault upon VA 32 from process 2
+At time 61 page loaded for process 2 into frame 5

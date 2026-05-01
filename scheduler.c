@@ -1,3 +1,4 @@
+#define HEADERS_IMPLEMENTATION
 #include "headers.h"
 #include "queue.h"
 #include "MMU.h"
@@ -17,12 +18,16 @@ struct processData
     int runningtime;
     int remainingtime;
     int id;
+    int base;
+    int limit;
 };
 
 struct msgbuff
 {
     long mtype;
     struct processData p;
+    int req_count;                   // 🔥 number of requests
+    struct MemRequest requests[100]; // 🔥 requests of THIS process
 };
 
 struct sharedData
@@ -30,16 +35,12 @@ struct sharedData
     bool is_finished;
 };
 
-struct MemRequest
-{
-    int time;
-    int address;
-    char mode;
-};
+
 
 PCB pcbs[100];
 int finished_processes = 0;
 int number_of_processes = 0;
+int expected_processes = 0;
 int msg_id;
 Queue *ready_queue;
 int pcb_count = 0;
@@ -54,20 +55,43 @@ int req_index = 0;
 int req_count = 0;
 struct MemRequest requests[1000];
 
+// PCB createPCB(struct processData p)
+// {
+//     PCB pcb;
+//     pcb.id = p.id;
+//     pcb.pid = 0; // not started yet
+//     pcb.arrival = p.arrivaltime;
+//     pcb.runtime = p.runningtime;
+//     pcb.remaining = p.runningtime;
+//     pcb.priority = p.priority;
+//     // Phase 2 additions
+//     pcb.cpu_time = 0;
+//     pcb.blocked_until = 0;
+//     pcb.base = pcb.id * 100;
+//     init_page_table(&pcb.page_table);
+//     return pcb;
+// }
 PCB createPCB(struct processData p)
 {
     PCB pcb;
+
     pcb.id = p.id;
-    pcb.pid = 0; // not started yet
+    pcb.pid = 0;
+
     pcb.arrival = p.arrivaltime;
     pcb.runtime = p.runningtime;
     pcb.remaining = p.runningtime;
     pcb.priority = p.priority;
-    // Phase 2 additions
     pcb.cpu_time = 0;
     pcb.blocked_until = 0;
-    pcb.base = pcb.id * 100;
+    pcb.base = p.base;
+    pcb.limit = p.limit;
+    pcb.waiting_time = 0;
+    pcb.WTA = 0;
     init_page_table(&pcb.page_table);
+    pcb.req_index = 0;
+    pcb.req_count = 0;
+
     return pcb;
 }
 
@@ -82,7 +106,7 @@ PCB *getPCB(int id)
     }
     return NULL;
 }
-
+/*
 void context_switch(FILE *pFile, FILE *pFile2, PCB *old, PCB *new, int number_of_cpu)
 {
     if (old != NULL && old->remaining > 0)
@@ -137,7 +161,66 @@ void context_switch(FILE *pFile, FILE *pFile2, PCB *old, PCB *new, int number_of
         kill(new->pid, SIGCONT);
     }
 }
+*/
+void context_switch(FILE *pFile, FILE *pFile2, PCB *old, PCB *new, int cpu)
+{
+    // ===== STOP OLD =====
+    if (old != NULL && old->remaining > 0)
+    {
+        int waiting_time =
+            getClk() - old->arrival - (old->runtime - old->remaining);
 
+        fprintf(pFile,
+                "At\ttime\t%d\tprocess\t%d\tstopped\tarr\t%d\t"
+                "total\t%d\tremain\t%d\twait\t%d\n",
+                getClk(), old->id, old->arrival,
+                old->runtime, old->remaining, waiting_time);
+
+        kill(old->pid, SIGSTOP);
+        sleep(1); // context switch cost
+    }
+    else if (old != NULL)
+    {
+        sleep(1);
+    }
+
+    // ===== START / RESUME NEW =====
+    int waiting_time =
+        getClk() - new->arrival - (new->runtime - new->remaining);
+
+    if (new->pid == 0)
+    {
+        fprintf(pFile,
+                "At\ttime\t%d\tprocess\t%d\tstarted\tarr\t%d\t"
+                "total\t%d\tremain\t%d\twait\t%d\n",
+                getClk(), new->id, new->arrival,
+                new->runtime, new->remaining, waiting_time);
+
+        int pid = fork();
+
+        if (pid == 0)
+        {
+            char rem[10];
+            sprintf(rem, "%d", new->remaining);
+            execl("./process.out", "process.out", rem, NULL);
+        }
+        else
+        {
+            new->pid = pid;
+        }
+    }
+    else
+    {
+        fprintf(pFile,
+                "At\ttime\t%d\tprocess\t%d\tresumed\tarr\t%d\t"
+                "total\t%d\tremain\t%d\twait\t%d\n",
+                getClk(), new->id, new->arrival,
+                new->runtime, new->remaining, waiting_time);
+
+        kill(new->pid, SIGCONT);
+    }
+}
+/*
 int access_memory(PCB *p, FILE *memFile)
 {
     if (req_index >= req_count)
@@ -208,23 +291,98 @@ int access_memory(PCB *p, FILE *memFile)
     req_index++;
     return 0;
 }
+*/
+int access_memory(PCB *p, FILE *memFile)
+{
+    if (p->req_index >= p->req_count)
+        return 1;
 
-void check_blocked()
+    if (p->requests[p->req_index].time != p->cpu_time)
+        return 1;
+
+    int va = p->requests[p->req_index].address;
+    char mode = p->requests[p->req_index].mode;
+
+    int page = va / PAGE_SIZE;
+
+    PageTableEntry *entry = &p->page_table.pages[page];
+
+    printf("[MMU] P%d requests VA=%d\n", p->id, va);
+
+    // HIT
+    if (entry->valid)
+    {
+        sleep(1); // memory access
+        p->req_index++;
+        return 1;
+    }
+
+    // PAGE FAULT
+    fprintf(memFile, "PageFault from P%d at VA %d\n", p->id, va);
+
+    int frame = allocateFrame();
+
+    if (frame == -1)
+    {
+        frame = selectVictimNRU();
+
+        if (memory[frame].M)
+        {
+            sleep(10); // swap out
+        }
+    }
+
+    sleep(10); // load from disk
+
+    entry->valid = 1;
+    entry->frame_number = frame;
+
+    p->req_index++;
+
+    return 0; // BLOCK
+}
+
+// void check_blocked()
+// {
+//     QNode *cur = blocked_queue->front;
+//     QNode *next;
+//     while (cur)
+//     {
+//         next = cur->next; // save next BEFORE removal
+//         PCB *p = getPCB(cur->id);
+//         if (getClk() >= p->blocked_until)
+//         {
+//             printf("[TIME %d] UNBLOCK P%d\n", getClk(), p->id);
+
+//             enqueue(ready_queue, p->id);
+//             removeFromQueue(blocked_queue, p->id);
+//         }
+//         cur = cur->next;
+//     }
+// }
+void check_blocked(FILE *pFile)
 {
     QNode *cur = blocked_queue->front;
     QNode *next;
+
     while (cur)
     {
-        next = cur->next; // save next BEFORE removal
+        next = cur->next;
+
         PCB *p = getPCB(cur->id);
+
         if (getClk() >= p->blocked_until)
         {
             printf("[TIME %d] UNBLOCK P%d\n", getClk(), p->id);
 
+            fprintf(pFile, "At\ttime\t%d\tprocess\t%d\tresumed\n",
+                    getClk(), p->id);
+
             enqueue(ready_queue, p->id);
             removeFromQueue(blocked_queue, p->id);
         }
-        cur = cur->next;
+
+        cur = next;
     }
 }
 
@@ -232,11 +390,16 @@ void HPF(FILE *pFile)
 {
     struct msgbuff message;
     ready_queue = createQueue();
-    shmid = shmget(SHKEY + 10, sizeof(struct sharedData), IPC_CREAT | 0666);
-    shared = (struct sharedData *)shmat(shmid, NULL, 0);
-    while (!shared->is_finished || finished_processes < number_of_processes)
+    shmid = shmget(SHKEY + 10, sizeof(struct sharedData), 0666);
+    while (shmid == -1)
     {
-        while (msgrcv(msg_id, &message, sizeof(struct processData), 1, IPC_NOWAIT) != -1)
+        sleep(1);
+        shmid = shmget(SHKEY + 10, sizeof(struct sharedData), 0666);
+    }
+    shared = (struct sharedData *)shmat(shmid, NULL, 0);
+    while (finished_processes < expected_processes)
+    {
+        while (msgrcv(msg_id, &message, sizeof(message) - sizeof(long), 1, IPC_NOWAIT) != -1)
         {
             printf("[TIME %d] Received P%d (arr=%d, run=%d, pri=%d)\n",
                    getClk(),
@@ -245,7 +408,6 @@ void HPF(FILE *pFile)
                    message.p.runningtime,
                    message.p.priority);
             PCB pcb = createPCB(message.p);
-            number_of_processes++;
             if (pcb.runtime == 0)
             {
                 printf("[TIME %d] P%d finished immediately\n", getClk(), pcb.id);
@@ -306,7 +468,7 @@ void HPF(FILE *pFile)
                 fprintf(pFile, "At\ttime\t%d\tprocess\t%d\tfinished\tarr\t%d\ttotal\t%d\tremain\t%d\twait\t%d\tTA\t%d\tWTA\t%.2f\n", getClk(), current->id, current->arrival, current->runtime, current->remaining, waiting_time, TA, WTA);
 
                 current = NULL;
-                while (msgrcv(msg_id, &message, sizeof(struct processData), 2, IPC_NOWAIT) != -1)
+                while (msgrcv(msg_id, &message, sizeof(message) - sizeof(long), 2, IPC_NOWAIT) != -1)
                 {
                     printf("[TIME %d] Received P%d (run=%d)\n",
                            getClk(),
@@ -314,7 +476,6 @@ void HPF(FILE *pFile)
                            message.p.runningtime);
 
                     PCB pcb = createPCB(message.p);
-                    number_of_processes++;
                     if (pcb.runtime == 0)
                     {
                         printf("[TIME %d] P%d finished immediately\n",
@@ -340,20 +501,31 @@ void HPF(FILE *pFile)
     }
     freeQueue(ready_queue);
 }
-
+/*
 void RR(FILE *pFile, int quantum, int k)
 {
     struct msgbuff message;
     ready_queue = createQueue();
     int quantum_counter = 0;
     current = NULL;
-    shmid = shmget(SHKEY + 10, sizeof(struct sharedData), IPC_CREAT | 0666);
+    shmid = shmget(SHKEY + 10, sizeof(struct sharedData), 0666);
+    while (shmid == -1)
+    {
+        sleep(1);
+        shmid = shmget(SHKEY + 10, sizeof(struct sharedData), 0666);
+    }
     shared = (struct sharedData *)shmat(shmid, NULL, 0);
     memFile = fopen("memory.log", "w");
-    while (!shared->is_finished || finished_processes < number_of_processes)
+    if (!memFile)
     {
-        check_blocked();
-        while (msgrcv(msg_id, &message, sizeof(struct processData), 2, IPC_NOWAIT) != -1)
+        perror("fopen(memory.log)");
+        return;
+    }
+    setvbuf(memFile, NULL, _IOLBF, 0);
+    while (finished_processes < expected_processes)
+    {
+        check_blocked(pFile);
+        while (msgrcv(msg_id, &message, sizeof(message) - sizeof(long), 2, IPC_NOWAIT) != -1)
         {
             printf("[TIME %d] Received P%d (run=%d)\n",
                    getClk(), message.p.id, message.p.runningtime);
@@ -532,6 +704,237 @@ void RR(FILE *pFile, int quantum, int k)
     fclose(memFile);
     freeQueue(ready_queue);
 }
+*/
+void RR(FILE *pFile, int quantum, int k)
+{
+    struct msgbuff message;
+
+    ready_queue = createQueue();
+    blocked_queue = createQueue();
+
+    int quantum_counter = 0;
+    current = NULL;
+
+    shmid = shmget(SHKEY + 10, sizeof(struct sharedData), IPC_CREAT | 0666);
+    shared = (struct sharedData *)shmat(shmid, NULL, 0);
+
+    memFile = fopen("memory.log", "w");
+
+    while (!shared->is_finished || finished_processes < expected_processes)
+    {
+        // =========================
+        // UNBLOCK PROCESSES
+        // =========================
+        QNode *cur = blocked_queue->front;
+        QNode *next;
+
+        while (cur)
+        {
+            next = cur->next;
+            PCB *p = getPCB(cur->id);
+
+            if (getClk() >= p->blocked_until)
+            {
+                printf("[TIME %d] UNBLOCK P%d\n", getClk(), p->id);
+
+                fprintf(pFile,
+                        "At\ttime\t%d\tprocess\t%d\tresumed\n",
+                        getClk(), p->id);
+
+                enqueue(ready_queue, p->id);
+                removeFromQueue(blocked_queue, p->id);
+            }
+            cur = next;
+        }
+
+        // =========================
+        // RECEIVE NEW PROCESSES
+        // =========================
+        while (msgrcv(msg_id, &message, sizeof(message) - sizeof(long), 2, IPC_NOWAIT) != -1)
+        {
+            PCB pcb = createPCB(message.p);
+
+            pcb.req_count = message.req_count;
+            pcb.req_index = 0;
+
+            for (int i = 0; i < pcb.req_count; i++)
+            {
+                pcb.requests[i] = message.requests[i];
+            }
+
+            pcbs[pcb_count++] = pcb;
+            enqueue(ready_queue, pcb.id);
+        }
+
+        // =========================
+        // PICK PROCESS
+        // =========================
+        if (current == NULL && !isEmpty(ready_queue))
+        {
+            int id = dequeue(ready_queue);
+            PCB *next = getPCB(id);
+
+            context_switch(pFile, NULL, NULL, next, 1);
+            current = next;
+            quantum_counter = 0;
+        }
+
+        // =========================
+        // EXECUTION
+        // =========================
+        if (current != NULL)
+        {
+            printf("[TIME %d] Running P%d\n", getClk(), current->id);
+
+            current->cpu_time++;
+
+            // =========================
+            // MEMORY ACCESS
+            // =========================
+            if (current->req_index < current->req_count && current->requests[current->req_index].time == current->cpu_time)
+            {
+                int va = current->requests[current->req_index].address;
+                int page = va / PAGE_SIZE;
+                PageTableEntry *entry = &current->page_table.pages[page];
+
+                printf("[MMU] P%d requests VA=%d (page %d)\n",
+                       current->id, va, page);
+
+                // ===== HIT =====
+                if (entry->valid)
+                {
+                    printf("[MMU] HIT in frame %d\n",
+                           entry->frame_number);
+
+                    sleep(1); // ✅ memory access = 1 sec
+
+                    current->req_index++;
+                }
+                // ===== PAGE FAULT =====
+                else
+                {
+                    printf("[MMU] PAGE FAULT\n");
+
+                    fprintf(memFile,
+                            "PageFault upon VA %d from process %d\n",
+                            va, current->id);
+                        fflush(memFile);
+
+                    sleep(10); // ✅ disk load = 10 sec
+
+                    int frame = allocateFrame();
+                    if (frame == -1)
+                        frame = selectVictimNRU();
+
+                    memory[frame].occupied = 1;
+                    memory[frame].process_id = current->id;
+                    memory[frame].page_number = page;
+
+                    entry->valid = 1;
+                    entry->frame_number = frame;
+
+                    fprintf(memFile,
+                            "At time %d page loaded for process %d into frame %d\n",
+                            getClk(), current->id, frame);
+                        fflush(memFile);
+
+                        // consume this request for the faulting process
+                        current->req_index++;
+
+                    // BLOCK PROCESS
+                    current->blocked_until = getClk() + 10;
+
+                    fprintf(pFile,
+                            "At\ttime\t%d\tprocess\t%d\tblocked\n",
+                            getClk(), current->id);
+
+                    enqueue(blocked_queue, current->id);
+
+                    current = NULL;
+
+                    // schedule another immediately
+                    if (!isEmpty(ready_queue))
+                    {
+                        int id = dequeue(ready_queue);
+                        PCB *next = getPCB(id);
+                        context_switch(pFile, NULL, NULL, next, 1);
+                        current = next;
+                    }
+
+                    continue;
+                }
+            }
+
+            // =========================
+            // CPU EXECUTION (1 sec)
+            // =========================
+            sleep(1);
+            current->remaining--;
+            quantum_counter++;
+
+            // =========================
+            // FINISH
+            // =========================
+            if (current->remaining == 0)
+            {
+                printf("[TIME %d] FINISH P%d\n",
+                       getClk(), current->id);
+
+                waitpid(current->pid, NULL, 0);
+
+                int TA = getClk() - current->arrival;
+                int waiting_time = TA - current->runtime;
+                float WTA = (float)TA / current->runtime;
+
+                current->waiting_time = waiting_time;
+                current->WTA = WTA;
+
+                fprintf(pFile,
+                        "At\ttime\t%d\tprocess\t%d\tfinished\tarr\t%d\t"
+                        "total\t%d\tremain\t0\twait\t%d\tTA\t%d\tWTA\t%.2f\n",
+                        getClk(),
+                        current->id,
+                        current->arrival,
+                        current->runtime,
+                        waiting_time,
+                        TA,
+                        WTA);
+
+                finished_processes++;
+                current = NULL;
+                quantum_counter = 0;
+            }
+
+            // =========================
+            // QUANTUM EXPIRE
+            // =========================
+            else if (quantum_counter == quantum)
+            {
+                printf("[TIME %d] Quantum expired for P%d\n",
+                       getClk(), current->id);
+
+                enqueue(ready_queue, current->id);
+
+                PCB *old = current;
+                current = NULL;
+
+                if (!isEmpty(ready_queue))
+                {
+                    int id = dequeue(ready_queue);
+                    PCB *next = getPCB(id);
+                    context_switch(pFile, NULL, old, next, 1);
+                    current = next;
+                }
+
+                quantum_counter = 0;
+            }
+        }
+    }
+
+    fclose(memFile);
+    freeQueue(ready_queue);
+    freeQueue(blocked_queue);
+}
 
 int totalRunTime(Queue *q, PCB *cpu_current)
 {
@@ -558,17 +961,21 @@ void twoCPUWithFCFS(FILE *pFile, FILE *pFile2, int N, int M)
     int returnFromSwitch2 = 0;
     struct msgbuff message;
     int last_clk = 0;
-    shmid = shmget(SHKEY + 10, sizeof(struct sharedData), IPC_CREAT | 0666);
-    shared = (struct sharedData *)shmat(shmid, NULL, 0);
-    while (!shared->is_finished || finished_processes < number_of_processes)
+    shmid = shmget(SHKEY + 10, sizeof(struct sharedData), 0666);
+    while (shmid == -1)
     {
-        while (msgrcv(msg_id, &message, sizeof(struct processData), 3, IPC_NOWAIT) != -1)
+        sleep(1);
+        shmid = shmget(SHKEY + 10, sizeof(struct sharedData), 0666);
+    }
+    shared = (struct sharedData *)shmat(shmid, NULL, 0);
+    while (finished_processes < expected_processes)
+    {
+        while (msgrcv(msg_id, &message, sizeof(message) - sizeof(long), 3, IPC_NOWAIT) != -1)
         {
             printf("[TIME %d] Received P%d (run=%d)\n",
                    getClk(), message.p.id, message.p.runningtime);
             PCB pcb = createPCB(message.p);
             pcbs[pcb_count++] = pcb;
-            number_of_processes++;
             int size_1 = getSize(cpu1);
             int size_2 = getSize(cpu2);
             if (size_1 <= size_2)
@@ -752,13 +1159,15 @@ int main(int argc, char *argv[])
 {
     initClk();
 
-    if (argc < 4)
+    if (argc < 7)
     {
-        printf("Usage: ./scheduler.out <num_proc> <algo> <quantum>\n");
+        printf("Usage: ./scheduler.out <num_proc> <algo> <quantum> <k> <N> <M>\n");
         destroyClk(true);
         return -1;
     }
     signal(SIGINT, handler);
+    number_of_processes = atoi(argv[1]);
+    expected_processes = number_of_processes;
     int algo = atoi(argv[2]);
     int quantum = atoi(argv[3]);
     int k = atoi(argv[4]);
@@ -787,20 +1196,20 @@ int main(int argc, char *argv[])
         float total_WTA_time = 0;
         int total_runtime = 0;
         float std_WTA = 0;
-        for (int i = 0; i < number_of_processes; i++)
+        for (int i = 0; i < expected_processes; i++)
         {
             total_waiting_time += pcbs[i].waiting_time;
             total_WTA_time += pcbs[i].WTA;
             total_runtime += pcbs[i].runtime;
         }
-        float avg_waiting_time = round(((float)total_waiting_time / number_of_processes) * 100) / 100;
-        float avg_WTA_time = round(((float)total_WTA_time / number_of_processes) * 100) / 100;
+        float avg_waiting_time = round(((float)total_waiting_time / expected_processes) * 100) / 100;
+        float avg_WTA_time = round(((float)total_WTA_time / expected_processes) * 100) / 100;
         float cpu_utilization = round(((float)total_runtime / getClk()) * 10000) / 100;
-        for (int i = 0; i < number_of_processes; i++)
+        for (int i = 0; i < expected_processes; i++)
         {
             std_WTA += pow(pcbs[i].WTA - avg_WTA_time, 2);
         }
-        std_WTA = round((sqrt(std_WTA / number_of_processes)) * 100) / 100;
+        std_WTA = round((sqrt(std_WTA / expected_processes)) * 100) / 100;
         pFile = fopen("scheduler.perf", "w");
         fprintf(pFile, "CPU utilization = %.2f%%\n", cpu_utilization);
         fprintf(pFile, "Avg WTA = %.2f\n", avg_WTA_time);
@@ -826,7 +1235,7 @@ int main(int argc, char *argv[])
         float cpu1_wta_sum = 0, cpu2_wta_sum = 0;
         float cpu1_wait_sum = 0, cpu2_wait_sum = 0;
         int last1 = 0, last2 = 0;
-        for (int i = 0; i < number_of_processes; i++)
+        for (int i = 0; i < expected_processes; i++)
         {
             int id = pcbs[i].id;
 
@@ -860,7 +1269,7 @@ int main(int argc, char *argv[])
         float cpu1_avg_wait = (cpu1_count ? (round(((float)cpu1_wait_sum / cpu1_count) * 100) / 100) : 0);
         float cpu2_avg_wait = (cpu2_count ? (round(((float)cpu2_wait_sum / cpu2_count) * 100) / 100) : 0);
         float cpu1_std_wta = 0, cpu2_std_wta = 0;
-        for (int i = 0; i < number_of_processes; i++)
+        for (int i = 0; i < expected_processes; i++)
         {
             int id = pcbs[i].id;
             if (assigned_cpu[id] == 1)

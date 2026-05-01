@@ -1,3 +1,4 @@
+#define HEADERS_IMPLEMENTATION
 #include "headers.h"
 
 struct processData
@@ -11,25 +12,20 @@ struct processData
     int limit;
 };
 
-struct msgbuff
-{
-    long mtype;
-    struct processData p;
-};
-
 struct sharedData
 {
     bool is_finished;
 };
 
-struct Request
+struct msgbuff
 {
-    int time;
-    int address;
-    char mode;
+    long mtype;
+    struct processData p;
+    int req_count;                // 🔥 number of requests
+    struct MemRequest requests[100]; // 🔥 requests of THIS process
 };
 
-struct Request requests[100];
+struct MemRequest requests[100];
 int req_count = 0;
 int req_index = 0;
 
@@ -65,14 +61,41 @@ void load_requests(int pid)
 void clearResources(int);
 int msg_id;
 struct sharedData *shared;
+int shmid;
+static int clk_pid_global = -1;
 
 int main(int argc, char *argv[])
 {
     signal(SIGINT, clearResources);
+
+    // Best-effort cleanup from any previously killed run
+    int old_clock = shmget(SHKEY, 4, 0444);
+    if (old_clock != -1)
+        shmctl(old_clock, IPC_RMID, NULL);
+
+    int old_q = msgget(MSGKEY, 0666);
+    if (old_q != -1)
+        msgctl(old_q, IPC_RMID, NULL);
+
+    shmid = shmget(SHKEY + 10, sizeof(struct sharedData), IPC_CREAT | 0666);
+    if (shmid == -1)
+    {
+        perror("shmget(SHKEY+10) failed");
+        return 1;
+    }
+    shared = (struct sharedData *)shmat(shmid, NULL, 0);
+    if (shared == (void *)-1)
+    {
+        perror("shmat(SHKEY+10) failed");
+        return 1;
+    }
+    shared->is_finished = false;
+
     FILE *file = fopen("processes.txt", "r");
     if (!file)
     {
         perror("Error opening file");
+        shmdt(shared);
         return 1;
     }
 
@@ -152,23 +175,34 @@ int main(int argc, char *argv[])
         }
         else
         {
-
+            
             initClk();
             int x = getClk();
             printf("current time is %d\n", x);
             msg_id = msgget(MSGKEY, IPC_CREAT | 0666);
             struct msgbuff message;
-            int shmid = shmget(SHKEY + 10, sizeof(struct sharedData), IPC_CREAT | 0666);
-            shared = (struct sharedData *)shmat(shmid, NULL, 0);
             for (int i = 0; i < number_of_processes; i++)
             {
-                shared->is_finished = false;
-                while (getClk() < p[i].arrivaltime)
-                    ;
+                
+                while (getClk() < p[i].arrivaltime);
+
+                struct msgbuff message;
                 message.mtype = choice;
                 message.p = p[i];
-                msgsnd(msg_id, &message, sizeof(struct processData), !IPC_NOWAIT);
-                printf("Sent P%d at %d\n", p[i].id, getClk());
+
+                // 🔥 Load THIS process requests
+                load_requests(p[i].id);
+
+                message.req_count = req_count;
+
+                for (int j = 0; j < req_count; j++)
+                {
+                    message.requests[j] = requests[j];
+                }
+
+                msgsnd(msg_id, &message, sizeof(message) - sizeof(long), !IPC_NOWAIT);
+
+                printf("Sent P%d with %d requests\n", p[i].id, req_count);
             }
             shared->is_finished = true;
             int stat_loc;
@@ -182,6 +216,7 @@ void clearResources(int signum)
 {
     msgctl(msg_id, IPC_RMID, NULL);
     shmdt(shared);
+    // shmctl(shmid, IPC_RMID, NULL);
     printf("Process Generator terminating!\n");
-    raise(SIGKILL);
+    exit(0);
 }

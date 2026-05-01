@@ -1,1 +1,23 @@
 #At	time	x	process	y	state	arr	w	total	z	remain	y	wait	k
+At	time	1	process	1	started	arr	1	total	6	remain	6	wait	0
+At	time	11	process	1	blocked
+At	time	11	process	2	started	arr	3	total	3	remain	3	wait	8
+At	time	21	process	2	blocked
+At	time	21	process	1	resumed
+At	time	21	process	1	resumed	arr	1	total	6	remain	6	wait	20
+At	time	31	process	1	blocked
+At	time	31	process	2	resumed
+At	time	31	process	2	resumed	arr	3	total	3	remain	3	wait	28
+At	time	41	process	2	blocked
+At	time	41	process	1	resumed
+At	time	41	process	1	resumed	arr	1	total	6	remain	6	wait	40
+At	time	51	process	1	blocked
+At	time	51	process	2	resumed
+At	time	51	process	2	resumed	arr	3	total	3	remain	3	wait	48
+At	time	61	process	2	blocked
+At	time	61	process	1	resumed
+At	time	61	process	1	resumed	arr	1	total	6	remain	6	wait	60
+At	time	67	process	1	finished	arr	1	total	6	remain	0	wait	60	TA	66	WTA	11.00
+At	time	71	process	2	resumed
+At	time	71	process	2	resumed	arr	3	total	3	remain	3	wait	68
+At	time	74	process	2	finished	arr	3	total	3	remain	0	wait	68	TA	71	WTA	23.67

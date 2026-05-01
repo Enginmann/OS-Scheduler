@@ -1,3 +1,5 @@
+#ifndef HEADERS_H
+#define HEADERS_H
 #include <stdio.h>      //if you don't use scanf/printf change this include
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -10,7 +12,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <signal.h>
-#include "MMU.h"
+
 
 typedef short bool;
 #define true 1
@@ -21,10 +23,34 @@ typedef short bool;
 
 ///==============================
 //don't mess with this variable//
-int * shmaddr;                 //
+#ifdef HEADERS_IMPLEMENTATION
+int *shmaddr = NULL;
+#else
+extern int *shmaddr;
+#endif
 //===============================
 
-// made by the team
+typedef struct MemRequest
+{
+    int time;
+    int address;
+    char mode;
+} MemRequest;
+
+typedef struct PageTableEntry
+{
+    int frame_number;
+    int valid;
+    int R;
+    int M;
+} PageTableEntry;
+
+typedef struct PageTable
+{
+    PageTableEntry pages[1024];
+    int page_table_frame;
+} PageTable;
+
 typedef struct PCB
 {
     int id;
@@ -37,22 +63,35 @@ typedef struct PCB
     float WTA;
     int base;
     int limit;
-    int cpu_time;           // used for request timing
+    int cpu_time; // used for request timing
     int blocked_until;
     PageTable page_table;
+    struct MemRequest requests[100];
+    int req_index;
+    int req_count;
 } PCB;
 
-int getClk()
-{
-    return *shmaddr;
-}
+int getClk(void);
+void initClk(void);
+void destroyClk(bool terminateAll);
 
 
 /*
  * All process call this function at the beginning to establish communication between them and the clock module.
  * Again, remember that the clock is only emulation!
 */
-void initClk()
+#ifdef HEADERS_IMPLEMENTATION
+
+int getClk(void)
+{
+    return *shmaddr;
+}
+
+/*
+ * All process call this function at the beginning to establish communication between them and the clock module.
+ * Again, remember that the clock is only emulation!
+*/
+void initClk(void)
 {
     int shmid = shmget(SHKEY, 4, 0444);
     while ((int)shmid == -1)
@@ -82,3 +121,6 @@ void destroyClk(bool terminateAll)
         killpg(getpgrp(), SIGINT);
     }
 }
+
+#endif
+#endif

@@ -1,3 +1,4 @@
+#define HEADERS_IMPLEMENTATION
 #include "headers.h"
 
 int remainingtime;
