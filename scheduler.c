@@ -30,12 +30,7 @@ struct msgbuff
     struct MemRequest requests[100]; // 🔥 requests of THIS process
 };
 
-struct sharedData
-{
-    bool is_finished;
-};
-
-
+// sharedData is defined in headers.h
 
 PCB pcbs[100];
 int finished_processes = 0;
@@ -47,7 +42,7 @@ int pcb_count = 0;
 PCB *current = NULL;
 int assigned_cpu[100];
 int finish_time[100];
-struct sharedData *shared;
+sharedData *shared;
 int shmid;
 FILE *memFile;
 Queue *blocked_queue;
@@ -91,6 +86,11 @@ PCB createPCB(struct processData p)
     init_page_table(&pcb.page_table);
     pcb.req_index = 0;
     pcb.req_count = 0;
+
+    pcb.has_pending_page = 0;
+    pcb.pending_page = -1;
+    pcb.pending_frame = -1;
+    pcb.pending_mode = 'r';
 
     return pcb;
 }
@@ -522,6 +522,12 @@ void RR(FILE *pFile, int quantum, int k)
         return;
     }
     setvbuf(memFile, NULL, _IOLBF, 0);
+
+    fprintf(memFile, "# PageFault upon VA \"xx\" from process \"yy\"\n\n");
+    fprintf(memFile, "# Free Physical page \"ZZ\" allocated\n\n");
+    fprintf(memFile, "# Swapping out page \"ZZ\" to disk\n\n");
+    fprintf(memFile, "# At time \"i\" disk address \"x\" for process \"y\" is loaded into memory page \"ZZ\".\n\n");
+    fflush(memFile);
     while (finished_processes < expected_processes)
     {
         check_blocked(pFile);
@@ -715,12 +721,33 @@ void RR(FILE *pFile, int quantum, int k)
     int quantum_counter = 0;
     current = NULL;
 
-    shmid = shmget(SHKEY + 10, sizeof(struct sharedData), IPC_CREAT | 0666);
-    shared = (struct sharedData *)shmat(shmid, NULL, 0);
+    shmid = shmget(SHKEY + 10, sizeof(sharedData), 0666);
+    while (shmid == -1)
+    {
+        sleep(1);
+        shmid = shmget(SHKEY + 10, sizeof(sharedData), 0666);
+    }
+    shared = (sharedData *)shmat(shmid, NULL, 0);
 
     memFile = fopen("memory.log", "w");
+    if (!memFile)
+    {
+        perror("fopen(memory.log)");
+        return;
+    }
+    setvbuf(memFile, NULL, _IOLBF, 0);
 
-    while (!shared->is_finished || finished_processes < expected_processes)
+    fprintf(memFile, "# PageFault upon VA \"xx\" from process \"yy\"\n\n");
+    fprintf(memFile, "# Free Physical page \"ZZ\" allocated\n\n");
+    fprintf(memFile, "# Swapping out page \"ZZ\" to disk\n\n");
+    fprintf(memFile, "# At time \"i\" disk address \"x\" for process \"y\" is loaded into memory page \"ZZ\".\n\n");
+    fflush(memFile);
+
+    initMemory();
+
+    int mem_accesses = 0;
+
+    while (1)
     {
         // =========================
         // UNBLOCK PROCESSES
@@ -736,6 +763,12 @@ void RR(FILE *pFile, int quantum, int k)
             if (getClk() >= p->blocked_until)
             {
                 printf("[TIME %d] UNBLOCK P%d\n", getClk(), p->id);
+
+                if (p->has_pending_page)
+                {
+                    swapIn(p, p->pending_page, p->pending_frame, p->pending_mode, memFile);
+                    p->has_pending_page = 0;
+                }
 
                 fprintf(pFile,
                         "At\ttime\t%d\tprocess\t%d\tresumed\n",
@@ -762,9 +795,18 @@ void RR(FILE *pFile, int quantum, int k)
                 pcb.requests[i] = message.requests[i];
             }
 
+            // Create per-process page table frame
+            createPageTable(&pcb, memFile);
+
             pcbs[pcb_count++] = pcb;
             enqueue(ready_queue, pcb.id);
         }
+
+        // =========================
+        // TERMINATION CHECK
+        // =========================
+        if (shared->is_finished && current == NULL && isEmpty(ready_queue) && isEmpty(blocked_queue))
+            break;
 
         // =========================
         // PICK PROCESS
@@ -794,54 +836,35 @@ void RR(FILE *pFile, int quantum, int k)
             if (current->req_index < current->req_count && current->requests[current->req_index].time == current->cpu_time)
             {
                 int va = current->requests[current->req_index].address;
-                int page = va / PAGE_SIZE;
-                PageTableEntry *entry = &current->page_table.pages[page];
+                char mode = current->requests[current->req_index].mode;
 
-                printf("[MMU] P%d requests VA=%d (page %d)\n",
-                       current->id, va, page);
+                int frame = -1;
+                int hit = handleMemoryRequest(current, va, mode, memFile, &frame);
+                mem_accesses++;
+                if (k > 0 && (mem_accesses % k) == 0)
+                    clear_R_bits();
 
-                // ===== HIT =====
-                if (entry->valid)
+                if (hit)
                 {
-                    printf("[MMU] HIT in frame %d\n",
-                           entry->frame_number);
-
-                    sleep(1); // ✅ memory access = 1 sec
-
+                    // Simulated memory access takes 1 second; child should not run during it
+                    kill(current->pid, SIGSTOP);
+                    sleep(1);
+                    kill(current->pid, SIGCONT);
                     current->req_index++;
                 }
-                // ===== PAGE FAULT =====
                 else
                 {
-                    printf("[MMU] PAGE FAULT\n");
+                    // Page fault: block for 10 seconds and finish swapIn on UNBLOCK
+                    kill(current->pid, SIGSTOP);
 
-                    fprintf(memFile,
-                            "PageFault upon VA %d from process %d\n",
-                            va, current->id);
-                        fflush(memFile);
+                    int page = va / PAGE_SIZE;
+                    current->has_pending_page = 1;
+                    current->pending_page = page;
+                    current->pending_frame = frame;
+                    current->pending_mode = mode;
 
-                    sleep(10); // ✅ disk load = 10 sec
+                    current->req_index++; // consume this request
 
-                    int frame = allocateFrame();
-                    if (frame == -1)
-                        frame = selectVictimNRU();
-
-                    memory[frame].occupied = 1;
-                    memory[frame].process_id = current->id;
-                    memory[frame].page_number = page;
-
-                    entry->valid = 1;
-                    entry->frame_number = frame;
-
-                    fprintf(memFile,
-                            "At time %d page loaded for process %d into frame %d\n",
-                            getClk(), current->id, frame);
-                        fflush(memFile);
-
-                        // consume this request for the faulting process
-                        current->req_index++;
-
-                    // BLOCK PROCESS
                     current->blocked_until = getClk() + 10;
 
                     fprintf(pFile,
@@ -849,7 +872,6 @@ void RR(FILE *pFile, int quantum, int k)
                             getClk(), current->id);
 
                     enqueue(blocked_queue, current->id);
-
                     current = NULL;
 
                     // schedule another immediately
@@ -857,6 +879,10 @@ void RR(FILE *pFile, int quantum, int k)
                     {
                         int id = dequeue(ready_queue);
                         PCB *next = getPCB(id);
+
+                        // Context switch overhead (switching from one process to another)
+                        sleep(1);
+
                         context_switch(pFile, NULL, NULL, next, 1);
                         current = next;
                     }
@@ -880,7 +906,11 @@ void RR(FILE *pFile, int quantum, int k)
                 printf("[TIME %d] FINISH P%d\n",
                        getClk(), current->id);
 
+                freeProcessMemory(current);
+
                 waitpid(current->pid, NULL, 0);
+
+                PCB *old = current;
 
                 int TA = getClk() - current->arrival;
                 int waiting_time = TA - current->runtime;
@@ -903,6 +933,19 @@ void RR(FILE *pFile, int quantum, int k)
                 finished_processes++;
                 current = NULL;
                 quantum_counter = 0;
+
+                // Immediately dispatch next ready process with context switch overhead
+                if (!isEmpty(ready_queue))
+                {
+                    int id = dequeue(ready_queue);
+                    PCB *next = getPCB(id);
+
+                    // Context switch overhead (switching from one process to another)
+                    sleep(1);
+
+                    context_switch(pFile, NULL, NULL, next, 1);
+                    current = next;
+                }
             }
 
             // =========================
@@ -1150,8 +1193,8 @@ void twoCPUWithFCFS(FILE *pFile, FILE *pFile2, int N, int M)
 void handler(int signum)
 {
     printf("Received SIGINT, exiting...\n");
-    shmdt(shared);
-    shmctl(shmid, IPC_RMID, NULL);
+    if (shared && shared != (void *)-1)
+        shmdt(shared);
     exit(0);
 }
 
@@ -1162,7 +1205,7 @@ int main(int argc, char *argv[])
     if (argc < 7)
     {
         printf("Usage: ./scheduler.out <num_proc> <algo> <quantum> <k> <N> <M>\n");
-        destroyClk(true);
+        destroyClk(false);
         return -1;
     }
     signal(SIGINT, handler);
@@ -1302,6 +1345,8 @@ int main(int argc, char *argv[])
     }
 
     printf("All processes finished. Cleaning up...\n");
-    destroyClk(true);
+    if (shared && shared != (void *)-1)
+        shmdt(shared);
+    destroyClk(false);
     return 0;
 }

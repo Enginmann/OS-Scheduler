@@ -22,14 +22,14 @@ void init_page_table(PageTable *pt);
 int allocateFrame();
 int selectVictimNRU();
 void clear_R_bits();
-int handlePageFault(PCB *p, int page, char mode, FILE *memFile);
+int handlePageFault(PCB *p, int va, char mode, FILE *memFile);
 void createPageTable(PCB *p, FILE *memFile);
 void loadFirstPage(PCB *p, FILE *memFile);
 void freeProcessMemory(PCB *p);
 void swapOut(int frame, FILE *memFile);
 void swapIn(PCB *p, int page, int frame, char mode, FILE *memFile);
 int translateAddress(PCB *p, int page);
-int handleMemoryRequest(PCB *p, int va, char mode, FILE *memFile);
+int handleMemoryRequest(PCB *p, int va, char mode, FILE *memFile, int *out_frame);
 PCB *getPCB(int id);
 
 #endif

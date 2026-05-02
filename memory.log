@@ -1,12 +1,26 @@
+# PageFault upon VA "xx" from process "yy"
+
+# Free Physical page "ZZ" allocated
+
+# Swapping out page "ZZ" to disk
+
+# At time "i" disk address "x" for process "y" is loaded into memory page "ZZ".
+
 PageFault upon VA 0 from process 1
-At time 11 page loaded for process 1 into frame 0
+Free Physical page 1 allocated
 PageFault upon VA 0 from process 2
-At time 21 page loaded for process 2 into frame 1
-PageFault upon VA 16 from process 1
-At time 31 page loaded for process 1 into frame 2
-PageFault upon VA 16 from process 2
-At time 41 page loaded for process 2 into frame 3
-PageFault upon VA 32 from process 1
-At time 51 page loaded for process 1 into frame 4
-PageFault upon VA 32 from process 2
-At time 61 page loaded for process 2 into frame 5
+Free Physical page 3 allocated
+At time 11 disk address 0 for process 1 is loaded into memory page 1.
+PageFault upon VA 10000 from process 1
+Free Physical page 4 allocated
+At time 13 disk address 20 for process 2 is loaded into memory page 3.
+PageFault upon VA 10000 from process 2
+Free Physical page 5 allocated
+At time 21 disk address 1 for process 1 is loaded into memory page 4.
+PageFault upon VA 100000 from process 1
+Free Physical page 6 allocated
+At time 23 disk address 21 for process 2 is loaded into memory page 5.
+PageFault upon VA 100000 from process 2
+Free Physical page 7 allocated
+At time 31 disk address 2 for process 1 is loaded into memory page 6.
+At time 33 disk address 22 for process 2 is loaded into memory page 7.

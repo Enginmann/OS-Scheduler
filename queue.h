@@ -163,6 +163,7 @@ static inline void removeFromQueue(Queue *q, int id)
             }
 
             free(current);
+            q->size--;
             return; // remove only first match
         }
 

@@ -4,6 +4,43 @@
 
 Frame memory[FRAME_COUNT];
 
+static void formatBinary(unsigned int value, char *out, size_t outSize)
+{
+    if (outSize == 0)
+        return;
+    if (value == 0)
+    {
+        if (outSize >= 2)
+        {
+            out[0] = '0';
+            out[1] = '\0';
+        }
+        else
+        {
+            out[0] = '\0';
+        }
+        return;
+    }
+
+    char tmp[64];
+    int idx = 0;
+    while (value && idx < (int)sizeof(tmp) - 1)
+    {
+        tmp[idx++] = (value & 1U) ? '1' : '0';
+        value >>= 1U;
+    }
+    tmp[idx] = '\0';
+
+    // reverse into out
+    size_t n = (size_t)idx;
+    if (n + 1 > outSize)
+        n = outSize - 1;
+
+    for (size_t i = 0; i < n; i++)
+        out[i] = tmp[idx - 1 - (int)i];
+    out[n] = '\0';
+}
+
 void initMemory()
 {
     for (int i = 0; i < FRAME_COUNT; i++)
@@ -15,9 +52,13 @@ void initMemory()
     }
 }
 
-int handlePageFault(PCB *p, int page, char mode, FILE *memFile)
+int handlePageFault(PCB *p, int va, char mode, FILE *memFile)
 {
-    fprintf(memFile, "PageFault upon VA %d from process %d\n", page * PAGE_SIZE, p->id);
+    int page = va / PAGE_SIZE;
+    char vaBin[64];
+    formatBinary((unsigned int)va, vaBin, sizeof(vaBin));
+
+    fprintf(memFile, "PageFault upon VA %s from process %d\n", vaBin, p->id);
     fflush(memFile);
 
     int frame = allocateFrame();
@@ -33,12 +74,19 @@ int handlePageFault(PCB *p, int page, char mode, FILE *memFile)
         fflush(memFile);
     }
 
-    swapIn(p, page, frame, mode, memFile);
+    // Reserve the selected frame immediately so it can't be allocated again
+    // before the scheduler completes swapIn at unblock time.
+    memory[frame].occupied = 1;
+    memory[frame].process_id = p->id;
+    memory[frame].page_number = page;
+    memory[frame].R = 0;
+    memory[frame].M = 0;
 
-    return 0; // BLOCK process
+    // Scheduler will perform swapIn at unblock time.
+    return frame;
 }
 
-int handleMemoryRequest(PCB *p, int va, char mode, FILE *memFile)
+int handleMemoryRequest(PCB *p, int va, char mode, FILE *memFile, int *out_frame)
 {
     int page = va / PAGE_SIZE;
 
@@ -48,12 +96,18 @@ int handleMemoryRequest(PCB *p, int va, char mode, FILE *memFile)
     {
         // HIT
         memory[frame].R = 1;
-        if (mode == 'w') memory[frame].M = 1;
+        if (mode == 'w')
+            memory[frame].M = 1;
+        if (out_frame)
+            *out_frame = frame;
         return 1;
     }
 
     // MISS → PAGE FAULT
-    return handlePageFault(p, page, mode, memFile);
+    frame = handlePageFault(p, va, mode, memFile);
+    if (out_frame)
+        *out_frame = frame;
+    return 0;
 }
 
 int translateAddress(PCB *p, int page)
@@ -72,7 +126,6 @@ void swapOut(int frame, FILE *memFile)
     {
         fprintf(memFile, "Swapping out page %d to disk\n", frame);
         fflush(memFile);
-        sleep(10);
     }
 
     // invalidate old page table
@@ -84,8 +137,6 @@ void swapOut(int frame, FILE *memFile)
 
 void swapIn(PCB *p, int page, int frame, char mode, FILE *memFile)
 {
-    sleep(10);
-
     memory[frame].occupied = 1;
     memory[frame].process_id = p->id;
     memory[frame].page_number = page;
@@ -96,7 +147,7 @@ void swapIn(PCB *p, int page, int frame, char mode, FILE *memFile)
     p->page_table.pages[page].frame_number = frame;
 
     fprintf(memFile,
-        "At time %d disk address %d for process %d is loaded into memory page %d\n",
+        "At time %d disk address %d for process %d is loaded into memory page %d.\n",
         getClk(), p->base + page, p->id, frame);
     fflush(memFile);
 }

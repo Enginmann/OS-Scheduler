@@ -69,7 +69,18 @@ typedef struct PCB
     struct MemRequest requests[100];
     int req_index;
     int req_count;
+
+    // Pending page load info (set on page fault, completed on unblock)
+    int has_pending_page;
+    int pending_page;
+    int pending_frame;
+    char pending_mode;
 } PCB;
+
+typedef struct sharedData
+{
+    bool is_finished;
+} sharedData;
 
 int getClk(void);
 void initClk(void);

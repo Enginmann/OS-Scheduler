@@ -12,10 +12,7 @@ struct processData
     int limit;
 };
 
-struct sharedData
-{
-    bool is_finished;
-};
+// sharedData is defined in headers.h
 
 struct msgbuff
 {
@@ -60,7 +57,7 @@ void load_requests(int pid)
 
 void clearResources(int);
 int msg_id;
-struct sharedData *shared;
+sharedData *shared;
 int shmid;
 static int clk_pid_global = -1;
 
@@ -175,6 +172,7 @@ int main(int argc, char *argv[])
         }
         else
         {
+            clk_pid_global = clk_pid;
             
             initClk();
             int x = getClk();
@@ -207,7 +205,11 @@ int main(int argc, char *argv[])
             shared->is_finished = true;
             int stat_loc;
             waitpid(sched_pid, &stat_loc, 0);
-            destroyClk(true);
+            if (clk_pid_global > 0)
+                kill(clk_pid_global, SIGINT);
+            shmdt(shared);
+            destroyClk(false);
+            // msg queue + shared shm are cleaned in clearResources or next run cleanup
         }
     }
 }
@@ -215,8 +217,11 @@ int main(int argc, char *argv[])
 void clearResources(int signum)
 {
     msgctl(msg_id, IPC_RMID, NULL);
-    shmdt(shared);
-    // shmctl(shmid, IPC_RMID, NULL);
+    if (clk_pid_global > 0)
+        kill(clk_pid_global, SIGINT);
+    if (shared && shared != (void *)-1)
+        shmdt(shared);
+    shmctl(shmid, IPC_RMID, NULL);
     printf("Process Generator terminating!\n");
     exit(0);
 }
