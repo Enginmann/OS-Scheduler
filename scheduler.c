@@ -1376,8 +1376,6 @@ int main(int argc, char *argv[])
     }
 
     printf("All processes finished. Cleaning up...\n");
-    if (shared && shared != (void *)-1)
-        shmdt(shared);
-    destroyClk(false);
+    destroyClk(true);
     return 0;
 }

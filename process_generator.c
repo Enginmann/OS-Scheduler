@@ -224,8 +224,7 @@ int main(int argc, char *argv[])
             if (clk_pid_global > 0)
                 kill(clk_pid_global, SIGINT);
             shmdt(shared);
-            destroyClk(false);
-            // msg queue + shared shm are cleaned in clearResources or next run cleanup
+            destroyClk(true);
         }
     }
 }
@@ -233,10 +232,6 @@ int main(int argc, char *argv[])
 void clearResources(int signum)
 {
     msgctl(msg_id, IPC_RMID, NULL);
-    if (clk_pid_global > 0)
-        kill(clk_pid_global, SIGINT);
-    if (shared && shared != (void *)-1)
-        shmdt(shared);
     shmctl(shmid, IPC_RMID, NULL);
     printf("Process Generator terminating!\n");
     exit(0);
