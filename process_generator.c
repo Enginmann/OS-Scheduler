@@ -26,6 +26,21 @@ struct MemRequest requests[100];
 int req_count = 0;
 int req_index = 0;
 
+static int parse_address_token(const char *addr)
+{
+    if (!addr)
+        return 0;
+
+    // If it's strictly 0/1 digits, treat as binary; otherwise allow 0x.. (hex) or decimal.
+    for (const char *p = addr; *p; ++p)
+    {
+        if (*p != '0' && *p != '1')
+            return (int)strtol(addr, NULL, 0);
+    }
+    return (int)strtol(addr, NULL, 2);
+}
+
+
 void load_requests(int pid)
 {
     char filename[20];
@@ -46,8 +61,9 @@ void load_requests(int pid)
         sscanf(line, "%d %s %c", &t, addr, &mode);
 
         requests[req_count].time = t;
-        requests[req_count].address = (int)strtol(addr, NULL, 2);
+        requests[req_count].address = parse_address_token(addr);
         requests[req_count].mode = mode;
+        snprintf(requests[req_count].address_str, sizeof(requests[req_count].address_str), "%s", addr);
 
         req_count++;
     }

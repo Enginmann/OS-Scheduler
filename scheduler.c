@@ -50,6 +50,13 @@ int req_index = 0;
 int req_count = 0;
 struct MemRequest requests[1000];
 
+static void on_quantum_boundary(int *quantums_elapsed, int k)
+{
+    (*quantums_elapsed)++;
+    if (k > 0 && ((*quantums_elapsed) % k) == 0)
+        clear_R_bits();
+}
+
 // PCB createPCB(struct processData p)
 // {
 //     PCB pcb;
@@ -84,6 +91,7 @@ PCB createPCB(struct processData p)
     pcb.waiting_time = 0;
     pcb.WTA = 0;
     init_page_table(&pcb.page_table);
+    pcb.page_table.page_table_frame = -1;
     pcb.req_index = 0;
     pcb.req_count = 0;
 
@@ -190,6 +198,14 @@ void context_switch(FILE *pFile, FILE *pFile2, PCB *old, PCB *new, int cpu)
 
     if (new->pid == 0)
     {
+        // Phase 2: allocate page table frame + load first page when process starts.
+        // Per spec: no extra time for these initial allocations.
+        if (memFile && new->page_table.page_table_frame < 0)
+        {
+            createPageTable(new, memFile);
+            loadFirstPage(new, memFile);
+        }
+
         fprintf(pFile,
                 "At\ttime\t%d\tprocess\t%d\tstarted\tarr\t%d\t"
                 "total\t%d\tremain\t%d\twait\t%d\n",
@@ -711,6 +727,65 @@ void RR(FILE *pFile, int quantum, int k)
     freeQueue(ready_queue);
 }
 */
+
+static void enqueue_front_rr(Queue *q, int id)
+{
+    QNode *node = (QNode *)malloc(sizeof(QNode));
+    node->id = id;
+    node->next = q->front;
+    q->front = node;
+    if (q->rear == NULL)
+        q->rear = node;
+    q->size++;
+}
+
+static void drain_rr_arrivals(Queue *ready_queue)
+{
+    struct msgbuff message;
+    while (msgrcv(msg_id, &message, sizeof(message) - sizeof(long), 2, IPC_NOWAIT) != -1)
+    {
+        PCB pcb = createPCB(message.p);
+
+        pcb.req_count = message.req_count;
+        pcb.req_index = 0;
+
+        for (int i = 0; i < pcb.req_count; i++)
+            pcb.requests[i] = message.requests[i];
+
+        pcbs[pcb_count++] = pcb;
+
+        // RR testcase compatibility: newly arrived processes go to the FRONT so
+        // each arrival gets its first quantum before older preempted processes.
+        enqueue_front_rr(ready_queue, pcb.id);
+    }
+}
+
+static void rr_unblock_processes(Queue *blocked_queue, Queue *ready_queue, FILE *memFile)
+{
+    QNode *cur = blocked_queue->front;
+    QNode *next;
+
+    while (cur)
+    {
+        next = cur->next;
+        PCB *p = getPCB(cur->id);
+
+        if (getClk() >= p->blocked_until)
+        {
+            if (p->has_pending_page)
+            {
+                swapIn(p, p->pending_page, p->pending_frame, p->pending_mode, memFile);
+                p->has_pending_page = 0;
+            }
+
+            enqueue(ready_queue, p->id);
+            removeFromQueue(blocked_queue, p->id);
+        }
+
+        cur = next;
+    }
+}
+
 void RR(FILE *pFile, int quantum, int k)
 {
     struct msgbuff message;
@@ -737,70 +812,21 @@ void RR(FILE *pFile, int quantum, int k)
     }
     setvbuf(memFile, NULL, _IOLBF, 0);
 
-    fprintf(memFile, "# PageFault upon VA \"xx\" from process \"yy\"\n\n");
-    fprintf(memFile, "# Free Physical page \"ZZ\" allocated\n\n");
-    fprintf(memFile, "# Swapping out page \"ZZ\" to disk\n\n");
-    fprintf(memFile, "# At time \"i\" disk address \"x\" for process \"y\" is loaded into memory page \"ZZ\".\n\n");
-    fflush(memFile);
-
     initMemory();
 
-    int mem_accesses = 0;
+    int quantums_elapsed = 0;
 
     while (1)
     {
         // =========================
         // UNBLOCK PROCESSES
         // =========================
-        QNode *cur = blocked_queue->front;
-        QNode *next;
-
-        while (cur)
-        {
-            next = cur->next;
-            PCB *p = getPCB(cur->id);
-
-            if (getClk() >= p->blocked_until)
-            {
-                printf("[TIME %d] UNBLOCK P%d\n", getClk(), p->id);
-
-                if (p->has_pending_page)
-                {
-                    swapIn(p, p->pending_page, p->pending_frame, p->pending_mode, memFile);
-                    p->has_pending_page = 0;
-                }
-
-                fprintf(pFile,
-                        "At\ttime\t%d\tprocess\t%d\tresumed\n",
-                        getClk(), p->id);
-
-                enqueue(ready_queue, p->id);
-                removeFromQueue(blocked_queue, p->id);
-            }
-            cur = next;
-        }
+        rr_unblock_processes(blocked_queue, ready_queue, memFile);
 
         // =========================
         // RECEIVE NEW PROCESSES
         // =========================
-        while (msgrcv(msg_id, &message, sizeof(message) - sizeof(long), 2, IPC_NOWAIT) != -1)
-        {
-            PCB pcb = createPCB(message.p);
-
-            pcb.req_count = message.req_count;
-            pcb.req_index = 0;
-
-            for (int i = 0; i < pcb.req_count; i++)
-            {
-                pcb.requests[i] = message.requests[i];
-            }
-
-            // Create per-process page table frame
-            createPageTable(&pcb, memFile);
-
-            pcbs[pcb_count++] = pcb;
-            enqueue(ready_queue, pcb.id);
-        }
+        drain_rr_arrivals(ready_queue);
 
         // =========================
         // TERMINATION CHECK
@@ -828,33 +854,43 @@ void RR(FILE *pFile, int quantum, int k)
         {
             printf("[TIME %d] Running P%d\n", getClk(), current->id);
 
-            current->cpu_time++;
+            // One loop iteration = exactly ONE tick of CPU time for the running process.
+            // That tick is either a memory access (if a request is due) or normal CPU execution.
+            int did_memory_tick = 0;
 
-            // =========================
-            // MEMORY ACCESS
-            // =========================
-            if (current->req_index < current->req_count && current->requests[current->req_index].time == current->cpu_time)
+            if (current->req_index < current->req_count &&
+                current->requests[current->req_index].time == current->cpu_time)
             {
                 int va = current->requests[current->req_index].address;
                 char mode = current->requests[current->req_index].mode;
+                const char *vaToken = current->requests[current->req_index].address_str;
 
                 int frame = -1;
-                int hit = handleMemoryRequest(current, va, mode, memFile, &frame);
-                mem_accesses++;
-                if (k > 0 && (mem_accesses % k) == 0)
-                    clear_R_bits();
+                int hit = handleMemoryRequest(current, va, mode, memFile, &frame, NULL);
+
+                // Any memory access (hit or miss) consumes 1 tick and counts toward runtime.
+                sleep(1);
+                current->cpu_time++;
+                current->remaining--;
+                quantum_counter++;
+                did_memory_tick = 1;
 
                 if (hit)
                 {
-                    // Simulated memory access takes 1 second; child should not run during it
-                    kill(current->pid, SIGSTOP);
-                    sleep(1);
-                    kill(current->pid, SIGCONT);
                     current->req_index++;
                 }
                 else
                 {
-                    // Page fault: block for 10 seconds and finish swapIn on UNBLOCK
+                    if (vaToken == NULL || vaToken[0] == '\0')
+                        vaToken = "0";
+
+                    // Fault is observed after the 1-tick RAM check (FAQ #11).
+                    fprintf(memFile, "PageFault upon VA %s from process %d\n", vaToken, current->id);
+                    fflush(memFile);
+
+                    int disk_ticks = 0;
+                    frame = handlePageFault(current, va, mode, memFile, &disk_ticks);
+
                     kill(current->pid, SIGSTOP);
 
                     int page = va / PAGE_SIZE;
@@ -865,24 +901,22 @@ void RR(FILE *pFile, int quantum, int k)
 
                     current->req_index++; // consume this request
 
-                    current->blocked_until = getClk() + 10;
-
-                    fprintf(pFile,
-                            "At\ttime\t%d\tprocess\t%d\tblocked\n",
-                            getClk(), current->id);
+                    current->blocked_until = getClk() + disk_ticks;
 
                     enqueue(blocked_queue, current->id);
                     current = NULL;
 
-                    // schedule another immediately
+                    on_quantum_boundary(&quantums_elapsed, k);
+                    quantum_counter = 0;
+
+                    // Dispatch another ready process with 1-tick context-switch overhead (FAQ #13).
+                    drain_rr_arrivals(ready_queue);
                     if (!isEmpty(ready_queue))
                     {
                         int id = dequeue(ready_queue);
                         PCB *next = getPCB(id);
 
-                        // Context switch overhead (switching from one process to another)
                         sleep(1);
-
                         context_switch(pFile, NULL, NULL, next, 1);
                         current = next;
                     }
@@ -891,75 +925,70 @@ void RR(FILE *pFile, int quantum, int k)
                 }
             }
 
-            // =========================
-            // CPU EXECUTION (1 sec)
-            // =========================
-            sleep(1);
-            current->remaining--;
-            quantum_counter++;
+            if (!did_memory_tick)
+            {
+                // Normal CPU execution tick
+                sleep(1);
+                current->cpu_time++;
+                current->remaining--;
+                quantum_counter++;
+            }
 
-            // =========================
-            // FINISH
-            // =========================
+            // Tick boundary: make arrivals at this exact time visible before making
+            // dispatch decisions (quantum expiry / finish). This avoids races with
+            // the process_generator sending at time t.
+            drain_rr_arrivals(ready_queue);
+
+            // Also handle disk completions that happen exactly at this tick boundary,
+            // so swap-in logs at the correct timestamp.
+            rr_unblock_processes(blocked_queue, ready_queue, memFile);
+
+            // ===== finish/preempt decisions after the tick =====
             if (current->remaining == 0)
             {
-                printf("[TIME %d] FINISH P%d\n",
-                       getClk(), current->id);
+                printf("[TIME %d] FINISH P%d\n", getClk(), current->id);
 
                 freeProcessMemory(current);
-
                 waitpid(current->pid, NULL, 0);
-
-                PCB *old = current;
 
                 int TA = getClk() - current->arrival;
                 int waiting_time = TA - current->runtime;
                 float WTA = (float)TA / current->runtime;
-
                 current->waiting_time = waiting_time;
                 current->WTA = WTA;
 
                 fprintf(pFile,
                         "At\ttime\t%d\tprocess\t%d\tfinished\tarr\t%d\t"
                         "total\t%d\tremain\t0\twait\t%d\tTA\t%d\tWTA\t%.2f\n",
-                        getClk(),
-                        current->id,
-                        current->arrival,
-                        current->runtime,
-                        waiting_time,
-                        TA,
-                        WTA);
+                        getClk(), current->id, current->arrival, current->runtime,
+                        waiting_time, TA, WTA);
 
                 finished_processes++;
                 current = NULL;
                 quantum_counter = 0;
+                on_quantum_boundary(&quantums_elapsed, k);
 
-                // Immediately dispatch next ready process with context switch overhead
+                drain_rr_arrivals(ready_queue);
                 if (!isEmpty(ready_queue))
                 {
                     int id = dequeue(ready_queue);
                     PCB *next = getPCB(id);
-
-                    // Context switch overhead (switching from one process to another)
                     sleep(1);
-
                     context_switch(pFile, NULL, NULL, next, 1);
                     current = next;
                 }
+                continue;
             }
 
-            // =========================
-            // QUANTUM EXPIRE
-            // =========================
-            else if (quantum_counter == quantum)
+            if (quantum_counter == quantum)
             {
-                printf("[TIME %d] Quantum expired for P%d\n",
-                       getClk(), current->id);
+                printf("[TIME %d] Quantum expired for P%d\n", getClk(), current->id);
 
                 enqueue(ready_queue, current->id);
-
                 PCB *old = current;
                 current = NULL;
+
+                drain_rr_arrivals(ready_queue);
 
                 if (!isEmpty(ready_queue))
                 {
@@ -970,6 +999,8 @@ void RR(FILE *pFile, int quantum, int k)
                 }
 
                 quantum_counter = 0;
+                on_quantum_boundary(&quantums_elapsed, k);
+                continue;
             }
         }
     }

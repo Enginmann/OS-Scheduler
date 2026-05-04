@@ -13,6 +13,7 @@ typedef struct
     int R;
     int M;
     int is_page_table;
+    int loading; // reserved for an in-flight disk load
 } Frame;
 
 extern Frame memory[FRAME_COUNT];
@@ -22,14 +23,15 @@ void init_page_table(PageTable *pt);
 int allocateFrame();
 int selectVictimNRU();
 void clear_R_bits();
-int handlePageFault(PCB *p, int va, char mode, FILE *memFile);
+int handlePageFault(PCB *p, int va, char mode, FILE *memFile, int *out_disk_ticks);
 void createPageTable(PCB *p, FILE *memFile);
 void loadFirstPage(PCB *p, FILE *memFile);
 void freeProcessMemory(PCB *p);
 void swapOut(int frame, FILE *memFile);
 void swapIn(PCB *p, int page, int frame, char mode, FILE *memFile);
 int translateAddress(PCB *p, int page);
-int handleMemoryRequest(PCB *p, int va, char mode, FILE *memFile, int *out_frame);
+int handleMemoryRequest(PCB *p, int va, char mode, FILE *memFile, int *out_frame, int *out_disk_ticks);
+int allocateAndLoadPageImmediate(PCB *p, int page, char mode, FILE *memFile);
 PCB *getPCB(int id);
 
 #endif

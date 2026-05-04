@@ -35,6 +35,7 @@ typedef struct MemRequest
     int time;
     int address;
     char mode;
+    char address_str[32];
 } MemRequest;
 
 typedef struct PageTableEntry
