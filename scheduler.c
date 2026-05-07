@@ -728,20 +728,10 @@ void RR(FILE *pFile, int quantum, int k)
 }
 */
 
-static void enqueue_front_rr(Queue *q, int id)
-{
-    QNode *node = (QNode *)malloc(sizeof(QNode));
-    node->id = id;
-    node->next = q->front;
-    q->front = node;
-    if (q->rear == NULL)
-        q->rear = node;
-    q->size++;
-}
-
-static void drain_rr_arrivals(Queue *ready_queue)
+static int drain_rr_arrivals(Queue *ready_queue)
 {
     struct msgbuff message;
+    int drained = 0;
     while (msgrcv(msg_id, &message, sizeof(message) - sizeof(long), 2, IPC_NOWAIT) != -1)
     {
         PCB pcb = createPCB(message.p);
@@ -754,9 +744,34 @@ static void drain_rr_arrivals(Queue *ready_queue)
 
         pcbs[pcb_count++] = pcb;
 
-        // RR testcase compatibility: newly arrived processes go to the FRONT so
-        // each arrival gets its first quantum before older preempted processes.
-        enqueue_front_rr(ready_queue, pcb.id);
+        // RR: newly arrived processes join the ready queue in FIFO order.
+        enqueue(ready_queue, pcb.id);
+        drained++;
+    }
+
+    return drained;
+}
+
+static void drain_rr_arrivals_stable(Queue *ready_queue)
+{
+    // The generator may send multiple processes for the same clock tick sequentially.
+    // This helper waits (without advancing the simulated clock) until the queue stays
+    // empty briefly, so we don't schedule before all same-tick arrivals are visible.
+    int empty_polls = 0;
+    // Require a longer quiet period so we don't miss bursty same-tick sends.
+    // 50 polls * 1ms = ~50ms of no arrivals.
+    for (int i = 0; i < 1000 && empty_polls < 50; i++)
+    {
+        int n = drain_rr_arrivals(ready_queue);
+        if (n == 0)
+        {
+            empty_polls++;
+            usleep(1000); // 1ms, real-time only
+        }
+        else
+        {
+            empty_polls = 0;
+        }
     }
 }
 
@@ -784,6 +799,17 @@ static void rr_unblock_processes(Queue *blocked_queue, Queue *ready_queue, FILE 
 
         cur = next;
     }
+}
+
+static void rr_enqueue_front(Queue *q, int id)
+{
+    QNode *node = (QNode *)malloc(sizeof(QNode));
+    node->id = id;
+    node->next = q->front;
+    q->front = node;
+    if (q->rear == NULL)
+        q->rear = node;
+    q->size++;
 }
 
 void RR(FILE *pFile, int quantum, int k)
@@ -839,6 +865,9 @@ void RR(FILE *pFile, int quantum, int k)
         // =========================
         if (current == NULL && !isEmpty(ready_queue))
         {
+            // If CPU is idle, give a brief chance to collect any remaining
+            // same-tick arrivals before committing to a dispatch.
+            drain_rr_arrivals_stable(ready_queue);
             int id = dequeue(ready_queue);
             PCB *next = getPCB(id);
 
@@ -864,6 +893,23 @@ void RR(FILE *pFile, int quantum, int k)
                 int va = current->requests[current->req_index].address;
                 char mode = current->requests[current->req_index].mode;
                 const char *vaToken = current->requests[current->req_index].address_str;
+
+                // Validate virtual page against the process limit (FAQ: ignore out-of-scope access).
+                int req_page = va / PAGE_SIZE;
+                if (req_page < 0 || req_page >= current->limit)
+                {
+                    // The attempt still consumes the 1-tick memory-access slot from runtime,
+                    // but produces no memory.log output.
+                    sleep(1);
+                    current->cpu_time++;
+                    current->remaining--;
+                    quantum_counter++;
+                    did_memory_tick = 1;
+
+                    current->req_index++; // discard invalid request
+                }
+                else
+                {
 
                 int frame = -1;
                 int hit = handleMemoryRequest(current, va, mode, memFile, &frame, NULL);
@@ -910,6 +956,8 @@ void RR(FILE *pFile, int quantum, int k)
                     quantum_counter = 0;
 
                     // Dispatch another ready process with 1-tick context-switch overhead (FAQ #13).
+                    // FAQ #23 ordering: unblocked before newly arrived.
+                    rr_unblock_processes(blocked_queue, ready_queue, memFile);
                     drain_rr_arrivals(ready_queue);
                     if (!isEmpty(ready_queue))
                     {
@@ -923,6 +971,7 @@ void RR(FILE *pFile, int quantum, int k)
 
                     continue;
                 }
+                }
             }
 
             if (!did_memory_tick)
@@ -934,14 +983,10 @@ void RR(FILE *pFile, int quantum, int k)
                 quantum_counter++;
             }
 
-            // Tick boundary: make arrivals at this exact time visible before making
-            // dispatch decisions (quantum expiry / finish). This avoids races with
-            // the process_generator sending at time t.
-            drain_rr_arrivals(ready_queue);
-
-            // Also handle disk completions that happen exactly at this tick boundary,
-            // so swap-in logs at the correct timestamp.
+            // Tick boundary: enforce FAQ ordering and exact-time handling.
+            // Unblocked processes enter ready queue before newly arrived ones.
             rr_unblock_processes(blocked_queue, ready_queue, memFile);
+            drain_rr_arrivals(ready_queue);
 
             // ===== finish/preempt decisions after the tick =====
             if (current->remaining == 0)
@@ -968,6 +1013,7 @@ void RR(FILE *pFile, int quantum, int k)
                 quantum_counter = 0;
                 on_quantum_boundary(&quantums_elapsed, k);
 
+                rr_unblock_processes(blocked_queue, ready_queue, memFile);
                 drain_rr_arrivals(ready_queue);
                 if (!isEmpty(ready_queue))
                 {
@@ -984,11 +1030,40 @@ void RR(FILE *pFile, int quantum, int k)
             {
                 printf("[TIME %d] Quantum expired for P%d\n", getClk(), current->id);
 
-                enqueue(ready_queue, current->id);
                 PCB *old = current;
                 current = NULL;
 
-                drain_rr_arrivals(ready_queue);
+                // FAQ #23 + FIFO RR:
+                // - If the ready queue already had processes from earlier, keep that FIFO order.
+                // - For events at this boundary, order is: preempted, then unblocked, then arrivals.
+                // - If the ready queue is empty and there are no boundary events, keep running
+                //   without a context switch (FAQ #30).
+                int had_ready_before = !isEmpty(ready_queue);
+
+                if (had_ready_before)
+                {
+                    // Existing ready processes keep their place; preempted joins ahead of boundary events.
+                    enqueue(ready_queue, old->id);
+                    rr_unblock_processes(blocked_queue, ready_queue, memFile);
+                    drain_rr_arrivals(ready_queue);
+                }
+                else
+                {
+                    // No one was ready before this boundary; check boundary events first.
+                    rr_unblock_processes(blocked_queue, ready_queue, memFile);
+                    drain_rr_arrivals(ready_queue);
+
+                    if (isEmpty(ready_queue))
+                    {
+                        current = old;
+                        quantum_counter = 0;
+                        on_quantum_boundary(&quantums_elapsed, k);
+                        continue;
+                    }
+
+                    // Boundary events exist: preempted has priority over them.
+                    rr_enqueue_front(ready_queue, old->id);
+                }
 
                 if (!isEmpty(ready_queue))
                 {
