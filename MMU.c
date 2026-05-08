@@ -58,13 +58,13 @@ int handlePageFault(PCB *p, int va, char mode, FILE *memFile, int *out_disk_tick
     int page = va / PAGE_SIZE;
 
     int frame = allocateFrame();
-    int disk_ticks = 10; // load demanded page
+    int disk_ticks = 10; 
 
     if (frame == -1)
     {
         frame = selectVictimNRU();
 
-        // victim write-back if modified
+        
         if (memory[frame].M)
         {
             fprintf(memFile, "Swapping out page %d to disk\n", frame);
@@ -72,7 +72,7 @@ int handlePageFault(PCB *p, int va, char mode, FILE *memFile, int *out_disk_tick
             disk_ticks += 10;
         }
 
-        // invalidate victim mapping
+        
         PCB *victim = getPCB(memory[frame].process_id);
         int victim_page = memory[frame].page_number;
         if (victim)
@@ -84,7 +84,7 @@ int handlePageFault(PCB *p, int va, char mode, FILE *memFile, int *out_disk_tick
         fflush(memFile);
     }
 
-    // Reserve the frame for this in-flight load so it isn't reused/replaced.
+    
     memory[frame].occupied = 1;
     memory[frame].loading = 1;
     memory[frame].is_page_table = 0;
@@ -108,7 +108,7 @@ int allocateAndLoadPageImmediate(PCB *p, int page, char mode, FILE *memFile)
     if (frame == -1)
     {
         frame = selectVictimNRU();
-        // victim write-back if modified
+        
         if (memory[frame].M)
         {
             fprintf(memFile, "Swapping out page %d to disk\n", frame);
@@ -141,7 +141,7 @@ int handleMemoryRequest(PCB *p, int va, char mode, FILE *memFile, int *out_frame
 
     if (frame != -1)
     {
-        // HIT
+        
         memory[frame].R = 1;
         if (mode == 'w')
             memory[frame].M = 1;
@@ -152,7 +152,7 @@ int handleMemoryRequest(PCB *p, int va, char mode, FILE *memFile, int *out_frame
         return 1;
     }
 
-    // MISS: scheduler will log PageFault and call handlePageFault()
+    
     if (out_frame)
         *out_frame = -1;
     if (out_disk_ticks)
@@ -178,7 +178,7 @@ void swapOut(int frame, FILE *memFile)
         fflush(memFile);
     }
 
-    // invalidate old page table
+    
     PCB *victim = getPCB(memory[frame].process_id);
     int page = memory[frame].page_number;
 
@@ -210,8 +210,8 @@ void createPageTable(PCB *p, FILE *memFile)
     if (frame == -1)
     {
         frame = selectVictimNRU();
-        // Do not swap out page tables; if we must evict to make room for a page table,
-        // we may evict a resident data page (NRU). We do not model time here.
+        
+        
         PCB *victim = getPCB(memory[frame].process_id);
         int victim_page = memory[frame].page_number;
         if (victim)
@@ -236,8 +236,8 @@ void createPageTable(PCB *p, FILE *memFile)
 
 void loadFirstPage(PCB *p, FILE *memFile)
 {
-    // Phase 2: first page is loaded at process start (preload), not a page fault.
-    // It takes no extra time, but we still log the allocation + load in memory.log.
+    
+    
     int page = 0;
 
     int frame = allocateFrame();
@@ -279,7 +279,7 @@ void freeProcessMemory(PCB *p)
         }
     }
 
-    // free page table frame
+    
     memory[p->page_table.page_table_frame].occupied = 0;
     memory[p->page_table.page_table_frame].loading = 0;
     memory[p->page_table.page_table_frame].R = 0;
@@ -297,8 +297,6 @@ void init_page_table(PageTable *pt)
         pt->pages[i].M = 0;
     }
 }
-
-// find free frame
 int allocateFrame()
 {
     for (int i = 0; i < FRAME_COUNT; i++)
@@ -307,8 +305,6 @@ int allocateFrame()
 
     return -1;
 }
-
-// NRU replacement
 int selectVictimNRU()
 {
     for (int class = 0; class < 4; class++)

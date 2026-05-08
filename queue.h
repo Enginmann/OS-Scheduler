@@ -145,26 +145,26 @@ static inline void removeFromQueue(Queue *q, int id)
     {
         if (current->id == id)
         {
-            // Case 1: removing front
+            
             if (prev == NULL)
             {
                 q->front = current->next;
 
                 if (q->front == NULL)
-                    q->rear = NULL; // queue became empty
+                    q->rear = NULL; 
             }
             else
             {
                 prev->next = current->next;
 
-                // Case 2: removing rear
+                
                 if (current == q->rear)
                     q->rear = prev;
             }
 
             free(current);
             q->size--;
-            return; // remove only first match
+            return; 
         }
 
         prev = current;

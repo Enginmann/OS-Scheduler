@@ -12,14 +12,14 @@ struct processData
     int limit;
 };
 
-// sharedData is defined in headers.h
+
 
 struct msgbuff
 {
     long mtype;
     struct processData p;
-    int req_count;                // 🔥 number of requests
-    struct MemRequest requests[100]; // 🔥 requests of THIS process
+    int req_count;                
+    struct MemRequest requests[100]; 
 };
 
 struct MemRequest requests[100];
@@ -31,7 +31,7 @@ static int parse_address_token(const char *addr)
     if (!addr)
         return 0;
 
-    // If it's strictly 0/1 digits, treat as binary; otherwise allow 0x.. (hex) or decimal.
+    
     for (const char *p = addr; *p; ++p)
     {
         if (*p != '0' && *p != '1')
@@ -81,7 +81,7 @@ int main(int argc, char *argv[])
 {
     signal(SIGINT, clearResources);
 
-    // Best-effort cleanup from any previously killed run
+    
     int old_clock = shmget(SHKEY, 4, 0444);
     if (old_clock != -1)
         shmctl(old_clock, IPC_RMID, NULL);
@@ -204,7 +204,7 @@ int main(int argc, char *argv[])
                 message.mtype = choice;
                 message.p = p[i];
 
-                // 🔥 Load THIS process requests
+                
                 load_requests(p[i].id);
 
                 message.req_count = req_count;

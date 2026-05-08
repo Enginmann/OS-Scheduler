@@ -99,7 +99,7 @@ PCB *getPCB(int id)
 
 void context_switch(FILE *pFile, FILE *pFile2, PCB *old, PCB *new, int cpu)
 {
-    // ===== STOP OLD =====
+    
     if (old != NULL && old->remaining > 0)
     {
         int waiting_time =
@@ -112,21 +112,21 @@ void context_switch(FILE *pFile, FILE *pFile2, PCB *old, PCB *new, int cpu)
                 old->runtime, old->remaining, waiting_time);
 
         kill(old->pid, SIGSTOP);
-        sleep(1); // context switch cost
+        sleep(1); 
     }
     else if (old != NULL)
     {
         sleep(1);
     }
 
-    // ===== START / RESUME NEW =====
+    
     int waiting_time =
         getClk() - new->arrival - (new->runtime - new->remaining);
 
     if (new->pid == 0)
     {
-        // Phase 2: allocate page table frame + load first page when process starts.
-        // no extra time for these initial allocations.
+        
+        
         if (memFile && new->page_table.page_table_frame < 0)
         {
             createPageTable(new, memFile);
@@ -180,7 +180,7 @@ static int drain_rr_arrivals(Queue *ready_queue)
 
         pcbs[pcb_count++] = pcb;
 
-        // RR: newly arrived processes join the ready queue in FIFO order.
+        
         enqueue(ready_queue, pcb.id);
         drained++;
     }
@@ -190,19 +190,19 @@ static int drain_rr_arrivals(Queue *ready_queue)
 
 static void drain_rr_arrivals_stable(Queue *ready_queue)
 {
-    // The generator may send multiple processes for the same clock tick sequentially.
-    // This helper waits (without advancing the simulated clock) until the queue stays
-    // empty briefly, so we don't schedule before all same-tick arrivals are visible.
+    
+    
+    
     int empty_polls = 0;
-    // Require a longer quiet period so we don't miss bursty same-tick sends.
-    // 50 polls * 1ms = ~50ms of no arrivals.
+    
+    
     for (int i = 0; i < 1000 && empty_polls < 50; i++)
     {
         int n = drain_rr_arrivals(ready_queue);
         if (n == 0)
         {
             empty_polls++;
-            usleep(1000); // 1ms, real-time only
+            usleep(1000); 
         }
         else
         {
@@ -280,29 +280,29 @@ void RR(FILE *pFile, int quantum, int k)
 
     while (1)
     {
-        // =========================
-        // UNBLOCK PROCESSES
-        // =========================
+        
+        
+        
         rr_unblock_processes(blocked_queue, ready_queue, memFile);
 
-        // =========================
-        // RECEIVE NEW PROCESSES
-        // =========================
+        
+        
+        
         drain_rr_arrivals(ready_queue);
 
-        // =========================
-        // TERMINATION CHECK
-        // =========================
+        
+        
+        
         if (shared->is_finished && current == NULL && isEmpty(ready_queue) && isEmpty(blocked_queue))
             break;
 
-        // =========================
-        // PICK PROCESS
-        // =========================
+        
+        
+        
         if (current == NULL && !isEmpty(ready_queue))
         {
-            // If CPU is idle, give a brief chance to collect any remaining
-            // same-tick arrivals before committing to a dispatch.
+            
+            
             drain_rr_arrivals_stable(ready_queue);
             int id = dequeue(ready_queue);
             PCB *next = getPCB(id);
@@ -312,15 +312,15 @@ void RR(FILE *pFile, int quantum, int k)
             quantum_counter = 0;
         }
 
-        // =========================
-        // EXECUTION
-        // =========================
+        
+        
+        
         if (current != NULL)
         {
             printf("[TIME %d] Running P%d\n", getClk(), current->id);
 
-            // One loop iteration = exactly ONE tick of CPU time for the running process.
-            // That tick is either a memory access (if a request is due) or normal CPU execution.
+            
+            
             int did_memory_tick = 0;
 
             if (current->req_index < current->req_count &&
@@ -330,19 +330,19 @@ void RR(FILE *pFile, int quantum, int k)
                 char mode = current->requests[current->req_index].mode;
                 const char *vaToken = current->requests[current->req_index].address_str;
 
-                // Validate virtual page against the process limit (FAQ: ignore out-of-scope access).
+                
                 int req_page = va / PAGE_SIZE;
                 if (req_page < 0 || req_page >= current->limit)
                 {
-                    // The attempt still consumes the 1-tick memory-access slot from runtime,
-                    // but produces no memory.log output.
+                    
+                    
                     sleep(1);
                     current->cpu_time++;
                     current->remaining--;
                     quantum_counter++;
                     did_memory_tick = 1;
 
-                    current->req_index++; // discard invalid request
+                    current->req_index++; 
                 }
                 else
                 {
@@ -350,7 +350,7 @@ void RR(FILE *pFile, int quantum, int k)
                     int frame = -1;
                     int hit = handleMemoryRequest(current, va, mode, memFile, &frame, NULL);
 
-                    // Any memory access (hit or miss) consumes 1 tick and counts toward runtime.
+                    
                     sleep(1);
                     current->cpu_time++;
                     current->remaining--;
@@ -366,7 +366,7 @@ void RR(FILE *pFile, int quantum, int k)
                         if (vaToken == NULL || vaToken[0] == '\0')
                             vaToken = "0";
 
-                        // Fault is observed after the 1-tick RAM check (FAQ #11).
+                        
                         fprintf(memFile, "PageFault upon VA %s from process %d\n", vaToken, current->id);
                         fflush(memFile);
 
@@ -381,7 +381,7 @@ void RR(FILE *pFile, int quantum, int k)
                         current->pending_frame = frame;
                         current->pending_mode = mode;
 
-                        current->req_index++; // consume this request
+                        current->req_index++; 
 
                         current->blocked_until = getClk() + disk_ticks;
 
@@ -391,8 +391,8 @@ void RR(FILE *pFile, int quantum, int k)
                         on_quantum_boundary(&quantums_elapsed, k);
                         quantum_counter = 0;
 
-                        // Dispatch another ready process with 1-tick context-switch overhead (FAQ #13).
-                        // FAQ #23 ordering: unblocked before newly arrived.
+                        
+                        
                         rr_unblock_processes(blocked_queue, ready_queue, memFile);
                         drain_rr_arrivals(ready_queue);
                         if (!isEmpty(ready_queue))
@@ -412,19 +412,19 @@ void RR(FILE *pFile, int quantum, int k)
 
             if (!did_memory_tick)
             {
-                // Normal CPU execution tick
+                
                 sleep(1);
                 current->cpu_time++;
                 current->remaining--;
                 quantum_counter++;
             }
 
-            // Tick boundary: enforce FAQ ordering and exact-time handling.
-            // Unblocked processes enter ready queue before newly arrived ones.
+            
+            
             rr_unblock_processes(blocked_queue, ready_queue, memFile);
             drain_rr_arrivals(ready_queue);
 
-            // ===== finish/preempt decisions after the tick =====
+            
             if (current->remaining == 0)
             {
                 printf("[TIME %d] FINISH P%d\n", getClk(), current->id);
@@ -469,23 +469,23 @@ void RR(FILE *pFile, int quantum, int k)
                 PCB *old = current;
                 current = NULL;
 
-                // FAQ #23 + FIFO RR:
-                // - If the ready queue already had processes from earlier, keep that FIFO order.
-                // - For events at this boundary, order is: preempted, then unblocked, then arrivals.
-                // - If the ready queue is empty and there are no boundary events, keep running
-                //   without a context switch (FAQ #30).
+                
+                
+                
+                
+                
                 int had_ready_before = !isEmpty(ready_queue);
 
                 if (had_ready_before)
                 {
-                    // Existing ready processes keep their place; preempted joins ahead of boundary events.
+                    
                     enqueue(ready_queue, old->id);
                     rr_unblock_processes(blocked_queue, ready_queue, memFile);
                     drain_rr_arrivals(ready_queue);
                 }
                 else
                 {
-                    // No one was ready before this boundary; check boundary events first.
+                    
                     rr_unblock_processes(blocked_queue, ready_queue, memFile);
                     drain_rr_arrivals(ready_queue);
 
@@ -497,7 +497,7 @@ void RR(FILE *pFile, int quantum, int k)
                         continue;
                     }
 
-                    // Boundary events exist: preempted has priority over them.
+                    
                     rr_enqueue_front(ready_queue, old->id);
                 }
 
@@ -557,12 +557,12 @@ int main(int argc, char *argv[])
         fprintf(pFile, "#At\ttime\tx\tprocess\ty\tstate\tarr\tw\ttotal\tz\tremain\ty\twait\tk\n");
         if (algo == 1)
         {
-            // HPF
-            //HPF(pFile);
+            
+            
         }
         else if (algo == 2)
         {
-            // RR
+            
             RR(pFile, quantum, k);
         }
         fclose(pFile);
@@ -599,8 +599,8 @@ int main(int argc, char *argv[])
         FILE *pFile2;
         pFile2 = fopen("scheduler_2.log", "w");
         fprintf(pFile2, "#At\ttime\tx\tprocess\ty\tstate\tarr\tw\ttotal\tz\tremain\ty\twait\tk\n");
-        // 2cpu + FCFS
-        //twoCPUWithFCFS(pFile1, pFile2, N, M);
+        
+        
         fclose(pFile1);
         fclose(pFile2);
 
