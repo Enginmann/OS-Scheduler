@@ -13,7 +13,7 @@ typedef struct
     int R;
     int M;
     int is_page_table;
-    int loading; // reserved for an in-flight disk load
+    int loading; 
 } Frame;
 
 extern Frame memory[FRAME_COUNT];

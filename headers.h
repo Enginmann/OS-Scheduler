@@ -1,6 +1,6 @@
 #ifndef HEADERS_H
 #define HEADERS_H
-#include <stdio.h>      //if you don't use scanf/printf change this include
+#include <stdio.h>      
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/file.h>
@@ -21,14 +21,14 @@ typedef short bool;
 #define SHKEY 300
 #define MSGKEY 100
 
-///==============================
-//don't mess with this variable//
+
+
 #ifdef HEADERS_IMPLEMENTATION
 int *shmaddr = NULL;
 #else
 extern int *shmaddr;
 #endif
-//===============================
+
 
 typedef struct MemRequest
 {
@@ -64,14 +64,14 @@ typedef struct PCB
     float WTA;
     int base;
     int limit;
-    int cpu_time; // used for request timing
+    int cpu_time; 
     int blocked_until;
     PageTable page_table;
     struct MemRequest requests[100];
     int req_index;
     int req_count;
 
-    // Pending page load info (set on page fault, completed on unblock)
+    
     int has_pending_page;
     int pending_page;
     int pending_frame;
@@ -88,10 +88,6 @@ void initClk(void);
 void destroyClk(bool terminateAll);
 
 
-/*
- * All process call this function at the beginning to establish communication between them and the clock module.
- * Again, remember that the clock is only emulation!
-*/
 #ifdef HEADERS_IMPLEMENTATION
 
 int getClk(void)
@@ -99,16 +95,12 @@ int getClk(void)
     return *shmaddr;
 }
 
-/*
- * All process call this function at the beginning to establish communication between them and the clock module.
- * Again, remember that the clock is only emulation!
-*/
 void initClk(void)
 {
     int shmid = shmget(SHKEY, 4, 0444);
     while ((int)shmid == -1)
     {
-        //Make sure that the clock exists
+        
         printf("Wait! The clock not initialized yet!\n");
         sleep(1);
         shmid = shmget(SHKEY, 4, 0444);
@@ -116,14 +108,6 @@ void initClk(void)
     shmaddr = (int *) shmat(shmid, (void *)0, 0);
 }
 
-
-/*
- * All process call this function at the end to release the communication
- * resources between them and the clock module.
- * Again, Remember that the clock is only emulation!
- * Input: terminateAll: a flag to indicate whether that this is the end of simulation.
- *                      It terminates the whole system and releases resources.
-*/
 
 void destroyClk(bool terminateAll)
 {
