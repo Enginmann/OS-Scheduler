@@ -558,7 +558,7 @@ int main(int argc, char *argv[])
         if (algo == 1)
         {
             // HPF
-            HPF(pFile);
+            //HPF(pFile);
         }
         else if (algo == 2)
         {
@@ -600,7 +600,7 @@ int main(int argc, char *argv[])
         pFile2 = fopen("scheduler_2.log", "w");
         fprintf(pFile2, "#At\ttime\tx\tprocess\ty\tstate\tarr\tw\ttotal\tz\tremain\ty\twait\tk\n");
         // 2cpu + FCFS
-        twoCPUWithFCFS(pFile1, pFile2, N, M);
+        //twoCPUWithFCFS(pFile1, pFile2, N, M);
         fclose(pFile1);
         fclose(pFile2);
 
