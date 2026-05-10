@@ -26,7 +26,7 @@ struct MemRequest requests[100];
 int req_count = 0;
 int req_index = 0;
 
-static int parse_address_token(const char *addr)
+static int parse_address(const char *addr)
 {
     if (!addr)
         return 0;
@@ -61,7 +61,7 @@ void load_requests(int pid)
         sscanf(line, "%d %s %c", &t, addr, &mode);
 
         requests[req_count].time = t;
-        requests[req_count].address = parse_address_token(addr);
+        requests[req_count].address = parse_address(addr);
         requests[req_count].mode = mode;
         snprintf(requests[req_count].address_str, sizeof(requests[req_count].address_str), "%s", addr);
 

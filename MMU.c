@@ -4,42 +4,6 @@
 
 Frame memory[FRAME_COUNT];
 
-static void formatBinary(unsigned int value, char *out, size_t outSize)
-{
-    if (outSize == 0)
-        return;
-
-    if (value == 0)
-    {
-        if (outSize >= 2)
-        {
-            out[0] = '0';
-            out[1] = '\0';
-        }
-        else
-        {
-            out[0] = '\0';
-        }
-        return;
-    }
-
-    char tmp[64];
-    int idx = 0;
-    while (value && idx < (int)sizeof(tmp) - 1)
-    {
-        tmp[idx++] = (value & 1U) ? '1' : '0';
-        value >>= 1U;
-    }
-    tmp[idx] = '\0';
-
-    size_t n = (size_t)idx;
-    if (n + 1 > outSize)
-        n = outSize - 1;
-
-    for (size_t i = 0; i < n; i++)
-        out[i] = tmp[idx - 1 - (int)i];
-    out[n] = '\0';
-}
 
 void initMemory()
 {
@@ -99,40 +63,6 @@ int handlePageFault(PCB *p, int va, char mode, FILE *memFile, int *out_disk_tick
     return frame;
 }
 
-int allocateAndLoadPageImmediate(PCB *p, int page, char mode, FILE *memFile)
-{
-    if (p->page_table.pages[page].valid)
-        return p->page_table.pages[page].frame_number;
-
-    int frame = allocateFrame();
-    if (frame == -1)
-    {
-        frame = selectVictimNRU();
-        
-        if (memory[frame].M)
-        {
-            fprintf(memFile, "Swapping out page %d to disk\n", frame);
-            fflush(memFile);
-        }
-
-        PCB *victim = getPCB(memory[frame].process_id);
-        int victim_page = memory[frame].page_number;
-        if (victim)
-            victim->page_table.pages[victim_page].valid = 0;
-    }
-    else
-    {
-        if (memFile)
-        {
-            fprintf(memFile, "Free Physical page %d allocated\n", frame);
-            fflush(memFile);
-        }
-    }
-
-    swapIn(p, page, frame, mode, memFile);
-    return frame;
-}
-
 int handleMemoryRequest(PCB *p, int va, char mode, FILE *memFile, int *out_frame, int *out_disk_ticks)
 {
     int page = va / PAGE_SIZE;
@@ -168,21 +98,6 @@ int translateAddress(PCB *p, int page)
         return e->frame_number;
 
     return -1;
-}
-
-void swapOut(int frame, FILE *memFile)
-{
-    if (memory[frame].M)
-    {
-        fprintf(memFile, "Swapping out page %d to disk\n", frame);
-        fflush(memFile);
-    }
-
-    
-    PCB *victim = getPCB(memory[frame].process_id);
-    int page = memory[frame].page_number;
-
-    victim->page_table.pages[page].valid = 0;
 }
 
 void swapIn(PCB *p, int page, int frame, char mode, FILE *memFile)
@@ -236,10 +151,7 @@ void createPageTable(PCB *p, FILE *memFile)
 
 void loadFirstPage(PCB *p, FILE *memFile)
 {
-    
-    
     int page = 0;
-
     int frame = allocateFrame();
     if (frame == -1)
     {
