@@ -1,17 +1,181 @@
-## headers.h contains clk functions, it should be included anywhere the clock functions are used.
+# OS Scheduler
 
-## To get time call:
+OS Scheduler is a C project for Linux that simulates CPU scheduling and memory management over a shared clock.
 
-getClk();
+The code uses IPC, shared memory, message queues, and a simulated clock to coordinate processes.
 
-## You can use Makefile to build and run your project
+## Project Overview
 
-# To compile your project, use the command:
+The project models how an operating system scheduler and memory manager handle processes over simulated time.
+
+Phase 1 includes:
+
+- Preemptive Highest Priority First (HPF)
+- Round Robin (RR)
+- Two-CPU FCFS with load balancing and work stealing
+- Scheduler logs and performance statistics
+
+Phase 2 adds:
+
+- Physical memory simulation with 32 frames of 16 bytes each
+- Per-process page tables
+- Demand paging
+- Page faults and disk delay simulation
+- NRU (Not Recently Used) page replacement
+- Memory logs for page allocation, swapping, and loads
+
+## Project Structure
+
+- [scheduler.c](scheduler.c) contains the main scheduler logic for HPF, RR, and 2-CPU FCFS, plus the Phase 2 paging integration.
+- [MMU.c](MMU.c) contains the paging and NRU memory-management code.
+- [MMU.h](MMU.h) defines the frame and paging constants and MMU interfaces.
+- [process.c](process.c) simulates a CPU-bound child process.
+- [clk.c](clk.c) provides the shared simulated clock.
+- [process_generator.c](process_generator.c) creates a `processes.txt` file for testing.
+- [test_generator.c](test_generator.c) is an additional generator utility.
+- [processes.txt](processes.txt) is the main process input file.
+- [requests_*.txt](requests_1.txt) are per-process memory request traces.
+- [Makefile](Makefile) builds all executables.
+
+## Build
+
+Use the provided Makefile:
+
+```bash
 make
+```
 
-# To run your project, use the command:
-make run
+This builds:
 
-# If you added a file to your project add it to the build section in the Makefile
+- `process_generator.out`
+- `clk.out`
+- `scheduler.out`
+- `process.out`
+- `test_generator.out`
 
-# Always start the line with a tab in Makefile, it is its syntax
+To clean generated binaries:
+
+```bash
+make clean
+```
+
+## Scheduling Algorithms
+
+### 1. Preemptive HPF
+
+- Uses process priority as the selection key.
+- Lower priority value means higher priority.
+- A newly arrived process can preempt the currently running one if it has a better priority.
+
+### 2. Round Robin
+
+- Uses a ready queue.
+- Supports a configurable quantum.
+- In Phase 2, RR also drives the paging simulation and periodic R-bit clearing.
+
+### 3. Two-CPU FCFS
+
+- Maintains two ready queues, one per CPU.
+- Assigns new processes to the shorter queue.
+- Periodically checks whether the total remaining work differs by more than `M` every `N` ticks.
+- If imbalance is detected, the scheduler steals work from the busier CPU.
+
+## Memory Management in Phase 2
+
+The MMU module simulates paging with the following design:
+
+- RAM size: 512 bytes
+- Page size: 16 bytes
+- Frame count: 32
+- Page-table size: 1024 entries per process
+
+Key behavior:
+
+- Each process gets its own page table.
+- The first page is loaded when the process starts.
+- A page fault blocks the process while simulated disk activity takes place.
+- If no free frame exists, the MMU selects a victim using NRU.
+- Page-table frames are never selected as victims.
+- Modified victim pages are written back before replacement.
+- Referenced bits are periodically cleared after every `k` RR quantums.
+
+## Input Files
+
+### `processes.txt`
+
+Each non-comment line describes one process.
+
+For Phase 1, the format is:
+
+```text
+id    arrival    runtime    priority
+```
+
+For Phase 2, the process generator also provides:
+
+```text
+id    arrival    runtime    priority    base    limit
+```
+
+Comments start with `#` and are ignored.
+
+### `requests_<id>.txt`
+
+Each process has a request trace that describes memory accesses relative to its CPU time.
+
+Format:
+
+```text
+time address mode
+```
+
+The address can be binary or numeric, and `mode` is either read or write.
+
+## Output Files
+
+### Phase 1
+
+- `scheduler.log` records process state transitions.
+- `scheduler.perf` records:
+	- CPU utilization
+	- Average WTA
+	- Average waiting time
+	- Standard deviation of WTA
+
+For 2-CPU FCFS, the project writes:
+
+- `scheduler_1.log`
+- `scheduler_2.log`
+- `scheduler_1.perf`
+- `scheduler_2.perf`
+
+### Phase 2
+
+- `memory.log` records page faults, frame allocation, swapping, and page loads.
+
+## Notes
+
+- The project uses System V IPC resources, so cleanup matters.
+- The scheduler and process generator both attach to the shared clock created by `clk.c`.
+- The code keeps the log formats consistent with the simulator output expected by the project.
+
+## Source Files at a Glance
+
+- `scheduler.c`: algorithm control, dispatching, logging, statistics.
+- `MMU.c`: page tables, frame allocation, NRU replacement, page-fault handling.
+- `process_generator.c`: reads `processes.txt`, starts the clock, launches the scheduler, and sends process data.
+- `process.c`: simple CPU-bound process simulation.
+- `clk.c`: shared time source.
+
+## How To Run
+
+The simulator is driven by `process_generator.out`.
+
+1. Run `make` to build the project.
+2. Run `process_generator.out`.
+3. Enter the number of processes when prompted.
+4. Choose the scheduling algorithm.
+5. For Round Robin, enter the quantum and the Phase 2 R-bit clearance timeout `k`.
+6. For 2-CPU FCFS, enter `N` and `M`.
+
+The generator starts the clock and scheduler processes, then sends process data through a System V message queue.
